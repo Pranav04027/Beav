@@ -8,12 +8,14 @@ export const tasks = sqliteTable("tasks", {
     //Github link
     githubIssueId: integer("githubIssueId").notNull(),
     githubIssueNumber: integer("githubIssueNumber").notNull(),
+    htmlUrl: text("html_url").notNull(),
     repoOwner: text("repoOwner").notNull(),
     repoName: text("repoName").notNull(),
     IssueTitle: text("IssueTitle").notNull(),
+    body: text("body"),
 
     //State Machine
-    status: text("status", { enum: ["pending", "running", "done", "failed"] }).notNull(),
+    status: text("status", { enum: ["pending", "claimed", "running", "done", "verifying", "failed", "crashed"] }).notNull(),
 
     //Resiliance
     retryCount: integer("retryCount").default(0),

@@ -20,6 +20,7 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
-    "@beav/core": "workspace:*"
+    "@beav/core": "workspace:*",
+    "zod": "^4.3.6"
   }
 }
