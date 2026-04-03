@@ -1,21 +1,14 @@
 {
-  "name": "Beav",
+  "name": "beav",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "tsx index.ts"
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "private": true,
   "packageManager": "pnpm@10.33.0",
-  "devDependencies": {
-    "tsx": "^4.21.0",
-    "typescript": "^6.0.2"
-  },
-  "dependencies": {
-    "dotenv": "^17.3.1"
+  "scripts": {
+    "dev": "pnpm -F @beav/core dev",
+    "dev:tracker": "pnpm -F @beav/tracker dev",
+    "dev:orchestrator": "pnpm -F @beav/orchestrator dev",
+    "dev:worker": "pnpm -F @beav/worker dev",
+    "build": "pnpm -r build",
+    "clean": "pnpm -r clean"
   }
 }
