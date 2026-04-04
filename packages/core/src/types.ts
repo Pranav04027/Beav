@@ -11,7 +11,7 @@ export const WorkflowSchema = z.object({
 })
 
 export const TrackedIssueSchema = z.object({
-    githubIssueId: z.string(),
+    githubIssueId: z.number(),
     githubIssueNumber: z.number(),
     Issuetitle: z.string(),
     repoOwner: z.string(),

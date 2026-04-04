@@ -1,4 +1,3 @@
-import { timestamp } from "drizzle-orm/mysql-core";
 import { sqliteTable, integer, text, uniqueIndex } from "drizzle-orm/sqlite-core"
 
 export const tasks = sqliteTable("tasks", {
@@ -32,11 +31,11 @@ export const tasks = sqliteTable("tasks", {
     completedAt: integer("completedAt"),
     createdAt: integer("createdAt")
 }, (table) => ({
-  uniqueRepoIssue: uniqueIndex("uniqueRepoIssue").on(
-    table.repoOwner, 
-    table.repoName, 
-    table.githubIssueNumber
-  ),
+    uniqueRepoIssue: uniqueIndex("uniqueRepoIssue").on(
+      table.repoOwner, 
+      table.repoName, 
+      table.githubIssueNumber
+    ),
 }));
 
 export const taskLogs = sqliteTable("taskLogs", {
