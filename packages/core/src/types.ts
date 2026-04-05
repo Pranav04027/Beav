@@ -6,7 +6,7 @@ export const WorkflowSchema = z.object({
     repoName: z.string().min(1),
     IssueTitle: z.string().default("autofix"),
     maxConcurrent: z.preprocess((val) => Number(val), z.number().positive().default(3)),
-    pollIntervallms: z.preprocess((val) => Number(val), z.number().min(5000).default(30000)),
+    pollIntervalms: z.preprocess((val) => Number(val), z.number().min(5000).default(30000)),
     workspaceRoot: z.string().default("./workspaces")
 })
 

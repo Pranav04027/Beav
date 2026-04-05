@@ -10,6 +10,15 @@ importers:
 
   packages/core:
     dependencies:
+      '@types/better-sqlite3':
+        specifier: ^7.6.13
+        version: 7.6.13
+      better-sqlite3:
+        specifier: ^12.8.0
+        version: 12.8.0
+      dotenv:
+        specifier: ^17.4.0
+        version: 17.4.0
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.8.0)
@@ -29,9 +38,6 @@ importers:
       '@beav/core':
         specifier: workspace:*
         version: link:../core
-      better-sqlite3:
-        specifier: ^12.8.0
-        version: 12.8.0
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.8.0)
@@ -39,9 +45,6 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.13
-        version: 7.6.13
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -57,10 +60,16 @@ importers:
       '@octokit/rest':
         specifier: ^22.0.1
         version: 22.0.1
+      dotenv:
+        specifier: ^17.4.0
+        version: 17.4.0
       zod:
         specifier: ^4.3.6
         version: 4.3.6
     devDependencies:
+      '@types/node':
+        specifier: ^25.5.2
+        version: 25.5.2
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -297,6 +306,9 @@ packages:
   '@types/node@25.5.0':
     resolution: {integrity: sha512-jp2P3tQMSxWugkCUKLRPVUpGaL5MVFwF8RDuSRztfwgN1wmqJeMSbKlnEtQqU8UrhTmzEmZdu2I6v2dpp7XIxw==}
 
+  '@types/node@25.5.2':
+    resolution: {integrity: sha512-tO4ZIRKNC+MDWV4qKVZe3Ql/woTnmHDr5JD8UI5hn2pwBrHEwOEMZK7WlNb5RKB6EoJ02gwmQS9OrjuFnZYdpg==}
+
   base64-js@1.5.1:
     resolution: {integrity: sha512-AKpaYlHn8t4SVbOHCy+b5+KKgvR4vrsD8vbvrbiQJps7fKDTkjkDry6ji0rUJjC0kzbNePLwzxq8iypo41qeWA==}
 
@@ -330,6 +342,10 @@ packages:
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
+
+  dotenv@17.4.0:
+    resolution: {integrity: sha512-kCKF62fwtzwYm0IGBNjRUjtJgMfGapII+FslMHIjMR5KTnwEmBmWLDRSnc3XSNP8bNy34tekgQyDT0hr7pERRQ==}
+    engines: {node: '>=12'}
 
   drizzle-orm@0.45.2:
     resolution: {integrity: sha512-kY0BSaTNYWnoDMVoyY8uxmyHjpJW1geOmBMdSSicKo9CIIWkSxMIj2rkeSR51b8KAPB7m+qysjuHme5nKP+E5Q==}
@@ -714,6 +730,10 @@ snapshots:
     dependencies:
       undici-types: 7.18.2
 
+  '@types/node@25.5.2':
+    dependencies:
+      undici-types: 7.18.2
+
   base64-js@1.5.1: {}
 
   before-after-hook@4.0.0: {}
@@ -747,6 +767,8 @@ snapshots:
   deep-extend@0.6.0: {}
 
   detect-libc@2.1.2: {}
+
+  dotenv@17.4.0: {}
 
   drizzle-orm@0.45.2(@types/better-sqlite3@7.6.13)(better-sqlite3@12.8.0):
     optionalDependencies:
