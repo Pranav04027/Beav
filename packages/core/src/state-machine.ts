@@ -39,7 +39,4 @@ export class TaskStateMachine{
     getStatus() {
         return this.currentStatus;
       }
-    
-    
-    
 }

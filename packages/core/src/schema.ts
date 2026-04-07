@@ -10,19 +10,19 @@ export const tasks = sqliteTable("tasks", {
     htmlUrl: text("html_url").notNull(),
     repoOwner: text("repoOwner").notNull(),
     repoName: text("repoName").notNull(),
-    IssueTitle: text("IssueTitle").notNull(),
+    issueTitle: text("issueTitle").notNull(),
     body: text("body"),
 
     //State Machine
-    status: text("status", { enum: ["pending", "claimed", "running", "done", "verifying", "failed", "crashed"] }).notNull(),
+    status: text("status", { enum: ["pending", "claimed", "running", "done", "verifying", "failed", "crashed"] }).notNull().default("pending"),
 
     //Resiliance
     retryCount: integer("retryCount").default(0),
     maxRetries: integer("max_retries").default(3),
 
     //Execution Data
-    workSpacePath: text("workSpacePath"),
-    workerPID: integer("workerPID"),
+    workspacePath: text("workspacePath"),
+    workerPid: integer("workerPid"),
 
     //Timestamps
     lastHeartbeat: integer("lastHeartbeat"),

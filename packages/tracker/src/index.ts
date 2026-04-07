@@ -1,1 +1,1 @@
-export * from "./ghTracker.js"
+export * from "./github.js"
