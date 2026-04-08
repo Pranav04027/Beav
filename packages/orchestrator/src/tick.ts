@@ -1,46 +1,117 @@
-import { db, sql, tasks, TaskStateMachine, eq, type Task} from "@beav/core";
+import { db, sql, tasks, TaskStateMachine, eq, and, lt, inArray, type Task } from "@beav/core";
 import { config , type Workflow} from "@beav/core"
-import {fetchIssue} from "@beav/tracker"
+import { fetchIssue } from "@beav/tracker"
+import {computeRetryDelayMs} from "./retries.js"
 
 async function recoverOnStartup() {
   await db.transaction(async (tx) => {
     const recovered = await tx.select().from(tasks).where(eq(tasks.status, "running"));
     for (const task of recovered) {
       const sm = new TaskStateMachine(task.status);
-      const next = sm.transitionTo("crashed")
-      await tx.update(tasks).set({ status: next }).where(eq(tasks.id, task.id));
+      const next = sm.transitionTo("crashed");
+      const retryCount = (task.retryCount ?? 0) + 1;
+      const maxRetries = task.maxRetries ?? 0;
+      const nextRetryAt = retryCount >= maxRetries ? null : Date.now() + computeRetryDelayMs(retryCount);
+
+      await tx
+        .update(tasks)
+        .set({
+          status: next,
+          retryCount,
+          nextRetryAt,
+        })
+        .where(eq(tasks.id, task.id));
     }
           
     if (recovered.length > 0) {
       console.log(`[Boot] Successfully recovered ${recovered.length} tasks.`);
     }
-  })
+  });
 }
 
-async function checkDeadTasksandUpdate(threshold:number) {
-  //check running tasks
-  //const threshold = Date.now() - config.thresholdMs;
+async function checkDeadTasksandUpdate(threshold: number) {
   await db.transaction(async (tx) => {
     const runningTasks = await tx
-        .select()
-        .from(tasks)
-        .where(eq(tasks.status, "running"));
+      .select()
+      .from(tasks)
+      .where(eq(tasks.status, "running"));
 
-     for (const task of runningTasks) {
-         if (task.lastHeartbeat != null && task.lastHeartbeat < threshold) {
-           const sm = new TaskStateMachine(task.status);
+    for (const task of runningTasks) {
+      if (task.lastHeartbeat != null && task.lastHeartbeat < threshold) {
+        const sm = new TaskStateMachine(task.status);
+        const retryCount = (task.retryCount ?? 0) + 1;
+        const maxRetries = task.maxRetries ?? 0;
 
-           try {
-             const next = sm.transitionTo("crashed");
-             await tx
-               .update(tasks)
-               .set({ status: next })
-               .where(eq(tasks.id, task.id));
-           } catch (e) {
-             console.error(`Invalid transition for task ${task.id}`);
-           }    
-         }
-       }
+        if (retryCount >= maxRetries) {
+          try {
+            const next = sm.transitionTo("failed");
+            await tx
+              .update(tasks)
+              .set({
+                status: next,
+                retryCount,
+                nextRetryAt: null,
+              })
+              .where(eq(tasks.id, task.id));
+          } catch {
+            console.error(`A task reached max retries and failed: ${task.id}`);
+          }
+        } else {
+          try {
+            const next = sm.transitionTo("crashed");
+            await tx
+              .update(tasks)
+              .set({
+                status: next,
+                retryCount,
+                nextRetryAt: Date.now() + computeRetryDelayMs(retryCount),
+              })
+              .where(eq(tasks.id, task.id));
+          } catch {
+            console.error(`Invalid transition for task ${task.id}`);
+          }
+        }
+      }
+    }
+  });
+}
+
+async function requeueRetryableTasks(now: number) {
+  await db.transaction(async (tx) => {
+    const retryableTasks = await tx
+      .select()
+      .from(tasks)
+      .where(
+        and(
+          inArray(tasks.status, ["crashed", "failed"]),
+          lt(tasks.nextRetryAt, now),
+          sql`${tasks.retryCount} < ${tasks.maxRetries}`
+        )
+      );
+
+    for (const task of retryableTasks) {
+      try {
+        const sm = new TaskStateMachine(task.status);
+        const next = sm.transitionTo("pending");
+        await tx
+          .update(tasks)
+          .set({
+            status: next,
+            nextRetryAt: null,
+            claimedAt: null,
+            startedAt: null,
+            workerPid: null,
+            lastHeartbeat: null,
+          })
+          .where(eq(tasks.id, task.id));
+      } catch {
+        console.error(`Failed to requeue task ${task.id}`);
+      }
+    }
+
+    if (retryableTasks.length > 0) {
+      console.log(`[Retry] Requeued ${retryableTasks.length} tasks back to pending.`);
+    }
   });
 }
 
@@ -84,26 +155,37 @@ async function dispatchTasks(config: Workflow) {
     const candidates = await tx
       .select()
       .from(tasks)
-      .where(sql`${tasks.status}='pending' OR ${tasks.status} = 'crashed' AND ${tasks.retryCount}<${tasks.maxRetries}`)
+      .where(eq(tasks.status, "pending"))
       .orderBy(tasks.createdAt)
-      .limit(availableSlot)
+      .limit(availableSlot);
     
     for (const task of candidates) {
-        const sm = new TaskStateMachine(task.status);
-        const nextStatus = sm.transitionTo("claimed");
-        
-        tx.update(tasks).set({ status: nextStatus, claimedAt: Date.now() }).where(eq(tasks.id, task.id))
-        
-        taskToLaunch.push((task))
+      const sm = new TaskStateMachine(task.status);
+      const nextStatus = sm.transitionTo("claimed");
+
+      const updatedTask = await tx
+        .update(tasks)
+        .set({ status: nextStatus, claimedAt: Date.now() })
+        .where(and(eq(tasks.id, task.id), eq(tasks.status, "pending")))
+        .returning();
+
+      const claimedTask = updatedTask[0];
+
+      if (!claimedTask) {
+        continue;
+      }
+
+      taskToLaunch.push(claimedTask);
     }
-  })
-    console.log(`[Dispatcher] Successfully claimed ${taskToLaunch.length} tasks. Spawning workers...`);
-    
-    for (const task of taskToLaunch) {
-        launchWorker(task, config).catch((err) => {
-        console.error(`[Launcher] Critical failure for task ${task.id}:`, err);
-      })
-    }
+  });
+
+  console.log(`[Dispatcher] Successfully claimed ${taskToLaunch.length} tasks. Spawning workers...`);
+  
+  for (const task of taskToLaunch) {
+    launchWorker(task, config).catch((err) => {
+      console.error(`[Launcher] Critical failure for task ${task.id}:`, err);
+    });
+  }
 }
 
 async function launchWorker(task:Task, config: Workflow) {
@@ -114,8 +196,10 @@ async function tick(config: Workflow) {
   console.log(`\nTick Start: ${new Date().toLocaleTimeString()}`);
     
     try {
-      const threshold = Date.now() - config.thresholdMs;
+      const now = Date.now();
+      const threshold = now - config.thresholdMs;
       await checkDeadTasksandUpdate(threshold);
+      await requeueRetryableTasks(now);
       
       await fetchCandidateIssue(config);
       

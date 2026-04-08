@@ -27,6 +27,7 @@ export const tasks = sqliteTable("tasks", {
     //Timestamps
     lastHeartbeat: integer("lastHeartbeat"),
     claimedAt: integer("claimedAt"),
+    nextRetryAt: integer("nextRetryAt"),
     startedAt: integer("startedAt"),
     completedAt: integer("completedAt"),
     createdAt: integer("createdAt")
