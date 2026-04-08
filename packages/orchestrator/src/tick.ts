@@ -1,4 +1,4 @@
-import { db, sql, tasks, TaskStateMachine, eq} from "@beav/core";
+import { db, sql, tasks, TaskStateMachine, eq, type Task} from "@beav/core";
 import { config , type Workflow} from "@beav/core"
 import {fetchIssue} from "@beav/tracker"
 
@@ -27,7 +27,7 @@ async function checkDeadTasksandUpdate(threshold:number) {
         .where(eq(tasks.status, "running"));
 
      for (const task of runningTasks) {
-         if (task.lastHeartbeat !== undefined && task.lastHeartbeat! < threshold) {
+         if (task.lastHeartbeat != null && task.lastHeartbeat < threshold) {
            const sm = new TaskStateMachine(task.status);
 
            try {
@@ -77,15 +77,54 @@ async function dispatchTasks(config: Workflow) {
     console.log("[Dispatcher] Max concurrency reached. Skipping dispatch.");
     return;
   }
-    
   
+  const taskToLaunch: Task[] = [];
+    
+  await db.transaction(async (tx) => {
+    const candidates = await tx
+      .select()
+      .from(tasks)
+      .where(sql`${tasks.status}='pending' OR ${tasks.status} = 'crashed' AND ${tasks.retryCount}<${tasks.maxRetries}`)
+      .orderBy(tasks.createdAt)
+      .limit(availableSlot)
+    
+    for (const task of candidates) {
+        const sm = new TaskStateMachine(task.status);
+        const nextStatus = sm.transitionTo("claimed");
+        
+        tx.update(tasks).set({ status: nextStatus, claimedAt: Date.now() }).where(eq(tasks.id, task.id))
+        
+        taskToLaunch.push((task))
+    }
+  })
+    console.log(`[Dispatcher] Successfully claimed ${taskToLaunch.length} tasks. Spawning workers...`);
+    
+    for (const task of taskToLaunch) {
+        launchWorker(task, config).catch((err) => {
+        console.error(`[Launcher] Critical failure for task ${task.id}:`, err);
+      })
+    }
+}
+
+async function launchWorker(task:Task, config: Workflow) {
     
 }
 
-async function launchWorker() {
+async function tick(config: Workflow) {
+  console.log(`\nTick Start: ${new Date().toLocaleTimeString()}`);
     
-}
-
-async function tick() {
-
+    try {
+      const threshold = Date.now() - config.thresholdMs;
+      await checkDeadTasksandUpdate(threshold);
+      
+      await fetchCandidateIssue(config);
+      
+      await dispatchTasks(config);
+      
+      // 4. (Day 4) The Gatekeeper: Check CI status for 'verifying' tasks
+      // await checkVerifyingTasks(workflowConfig);
+    } catch (error) {
+        console.error("CRITICAL TICK ERROR", error);
+    }
+    
 }

@@ -6,61 +6,61 @@ import { ulid } from 'ulid';
 
 
 export async function fetchIssue(owner: string, repo: string, label: string, ghToken: string) {
-    try {
-      const octokit = new Octokit({
-          auth: ghToken
-      })
-        
-        const { data } = await octokit.rest.issues.listForRepo({
-          owner,
-          repo,
-          labels: label,
-          state: "open",
-        })
-        
-        var errors = [];
-        var added:number = 0;
-        var skipped:number = 0;
+  try {
+    const octokit = new Octokit({
+        auth: ghToken
+    })
       
-        for (const issue of data) {
-          const clean = TrackedIssueSchema.safeParse({
-            githubIssueId: issue.id,
-            githubIssueNumber: issue.number,
-            issueTitle: issue.title,
-            htmlUrl: issue.html_url,
-            repoOwner: owner,
-            repoName: repo,
-            body: issue.body || "",
-          });
-            
-          if (!clean.success) {
-            console.error(`tracker/github.ts failed to parse Issue ID:${issue.id}`);
-            errors.push({
-              type: "VALIDATION_ERROR",
-              issueNumber: issue.number,
-              detail: clean.error.flatten()
-            })
+      const { data } = await octokit.rest.issues.listForRepo({
+        owner,
+        repo,
+        labels: label,
+        state: "open",
+      })
+      
+      var errors = [];
+      var added:number = 0;
+      var skipped:number = 0;
+    
+      for (const issue of data) {
+        const clean = TrackedIssueSchema.safeParse({
+          githubIssueId: issue.id,
+          githubIssueNumber: issue.number,
+          issueTitle: issue.title,
+          htmlUrl: issue.html_url,
+          repoOwner: owner,
+          repoName: repo,
+          body: issue.body || "",
+        });
+          
+        if (!clean.success) {
+          console.error(`tracker/github.ts failed to parse Issue ID:${issue.id}`);
+          errors.push({
+            type: "VALIDATION_ERROR",
+            issueNumber: issue.number,
+            detail: clean.error.flatten()
+          })
+            skipped++;
+            continue;
+        }
+        
+          const error = await savetoDB(clean.data);
+          if (error) {
+              errors.push(error);
               skipped++;
               continue;
           }
-          
-            const error = await savetoDB(clean.data);
-            if (error) {
-                errors.push(error);
-                skipped++;
-                continue;
-            }
-            added++;   
-        }
-        
-        return {
-            added,
-            skipped,
-            errors:errors
-        }
-    } catch (error) {
-        throw error;
-    }
+          added++;   
+      }
+      
+      return {
+          added,
+          skipped,
+          errors:errors
+      }
+  } catch (error) {
+      throw error;
+  }
 }
 
 async function savetoDB(task: TrackedIssue) {

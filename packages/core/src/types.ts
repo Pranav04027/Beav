@@ -1,4 +1,8 @@
 import { z } from "zod"
+import { tasks } from "./schema.js";
+import type { InferSelectModel } from "drizzle-orm";
+
+export type Task = InferSelectModel<typeof tasks>;
 
 export const WorkflowSchema = z.object({
     ghToken: z.string().min(1, "Github Token is required"),
