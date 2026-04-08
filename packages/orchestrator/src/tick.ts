@@ -1,7 +1,8 @@
 import { db, sql, tasks, TaskStateMachine, eq, and, lt, inArray, type Task } from "@beav/core";
 import { config , type Workflow} from "@beav/core"
 import { fetchIssue } from "@beav/tracker"
-import {computeRetryDelayMs} from "./retries.js"
+import { computeRetryDelayMs } from "./retries.js"
+import {setupWorkspace} from "./workspaces.js"
 
 async function recoverOnStartup() {
   await db.transaction(async (tx) => {
@@ -181,15 +182,20 @@ async function dispatchTasks(config: Workflow) {
 
   console.log(`[Dispatcher] Successfully claimed ${taskToLaunch.length} tasks. Spawning workers...`);
   
-  for (const task of taskToLaunch) {
+    for (const task of taskToLaunch) {
+        
     launchWorker(task, config).catch((err) => {
       console.error(`[Launcher] Critical failure for task ${task.id}:`, err);
     });
   }
 }
 
-async function launchWorker(task:Task, config: Workflow) {
+async function launchWorker(task: Task, config: Workflow) {
+    const taskId = task.id;
+    const htmlUrl = task.htmlUrl;
+    const workspaceRoot = config.workspaceRoot;
     
+    const safePath = await setupWorkspace(taskId, htmlUrl, workspaceRoot)
 }
 
 async function tick(config: Workflow) {
