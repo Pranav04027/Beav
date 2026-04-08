@@ -1,7 +1,11 @@
 {
-  "name": "@beav/orchestrator",
+  "name": "@beav/cli",
   "version": "1.0.0",
+  "private": true,
   "type": "module",
+  "bin": {
+    "beav": "./dist/index.js"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -16,13 +20,11 @@
     "clean": "rm -rf dist"
   },
   "devDependencies": {
+    "@types/node": "^25.5.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
   "dependencies": {
-    "@beav/core": "workspace:*",
-    "@beav/tracker": "workspace:*",
-    "drizzle-orm": "^0.45.2",
-    "zod": "^4.3.6"
+    "@beav/core": "workspace:*"
   }
 }

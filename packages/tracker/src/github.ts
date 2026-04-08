@@ -5,7 +5,7 @@ import { tasks } from "@beav/core";
 import { ulid } from 'ulid';
 
 
-export async function fetchCandidateIssues(owner: string, repo: string, label: string, ghToken: string) {
+export async function fetchIssue(owner: string, repo: string, label: string, ghToken: string) {
     try {
       const octokit = new Octokit({
           auth: ghToken

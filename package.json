@@ -5,6 +5,7 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "dev": "pnpm -F @beav/core dev",
+    "dev:cli": "pnpm -F @beav/cli dev",
     "dev:tracker": "pnpm -F @beav/tracker dev",
     "dev:orchestrator": "pnpm -F @beav/orchestrator dev",
     "dev:worker": "pnpm -F @beav/worker dev",

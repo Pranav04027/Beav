@@ -9,6 +9,7 @@ const rawConfig = {
   issueTitle: process.env.ISSUE_TITLE,
   maxConcurrent: process.env.MAX_CONCURRENT,
   pollIntervalMs: process.env.POLL_INTERVAL_MS,
+  thresholdMs: process.env.THRESHOLD_MS,
   workspaceRoot: process.env.WORKSPACE_ROOT,
 };
 
