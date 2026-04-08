@@ -2,9 +2,10 @@ import { db, sql, tasks, TaskStateMachine, eq, and, lt, inArray, type Task } fro
 import { config , type Workflow} from "@beav/core"
 import { fetchIssue } from "@beav/tracker"
 import { computeRetryDelayMs } from "./retries.js"
-import {setupWorkspace} from "./workspaces.js"
+import { setupWorkspace } from "./workspaces.js"
+import { launchTaskProcess } from "./launcher.js";
 
-async function recoverOnStartup() {
+export async function recoverOnStartup() {
   await db.transaction(async (tx) => {
     const recovered = await tx.select().from(tasks).where(eq(tasks.status, "running"));
     for (const task of recovered) {
@@ -191,14 +192,10 @@ async function dispatchTasks(config: Workflow) {
 }
 
 async function launchWorker(task: Task, config: Workflow) {
-    const taskId = task.id;
-    const htmlUrl = task.htmlUrl;
-    const workspaceRoot = config.workspaceRoot;
-    
-    const safePath = await setupWorkspace(taskId, htmlUrl, workspaceRoot)
+    await launchTaskProcess(task, config);
 }
 
-async function tick(config: Workflow) {
+export async function tick(config: Workflow) {
   console.log(`\nTick Start: ${new Date().toLocaleTimeString()}`);
     
     try {

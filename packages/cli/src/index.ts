@@ -1,8 +1,9 @@
 const command = process.argv[2];
+import {start} from "@beav/orchestrator"
 
 switch (command) {
   case "start":
-    console.log("beav start");
+  start()
     break;
   case "status":
     console.log("beav status");

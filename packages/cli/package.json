@@ -25,6 +25,7 @@
     "typescript": "^6.0.2"
   },
   "dependencies": {
-    "@beav/core": "workspace:*"
+    "@beav/core": "workspace:*",
+    "@beav/orchestrator": "workspace:*"
   }
 }

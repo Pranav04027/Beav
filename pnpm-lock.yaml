@@ -13,6 +13,9 @@ importers:
       '@beav/core':
         specifier: workspace:*
         version: link:../core
+      '@beav/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
     devDependencies:
       '@types/node':
         specifier: ^25.5.2
