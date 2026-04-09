@@ -1,1 +1,1 @@
-Beav is a CLI based Agent orcestrator that fixes Github Issues automatically.
+Beav is a CLI based Stateful Agentic-Server orcestrator that fixes Github Issues automatically.

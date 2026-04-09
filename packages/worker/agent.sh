@@ -10,7 +10,7 @@ if [ -z "$TASK_ID" ] || [ -z "$DB_PATH" ] || [ -z "$GITHUB_TOKEN" ] || [ -z "$GI
     exit 1
 fi
 
-echo "🚀 [Worker] Starting Task: $TASK_ID"
+echo "[Worker] Starting Task: $TASK_ID"
 
 # 3. THE HEARTBEAT (Cross-platform compatible)
 # We use $(($(date +%s) * 1000)) to support both Linux and macOS
@@ -31,11 +31,16 @@ BRANCH_NAME="fix/beav-$TASK_ID"
 echo "🌿 [Worker] Creating branch: $BRANCH_NAME"
 git checkout -b "$BRANCH_NAME"
 
-# --- [PLACEHOLDER FOR AGENT LOGIC] ---
-echo "// Fix applied by Beav at $(date)" >> fix_log.txt
-# -------------------------------------
+#AI LOGIC
+echo "[Worker] Calling Node.js AI Specialist..."
 
-echo "💾 [Worker] Preparing commit..."
+npx ts-node ./src/fix_code.ts "./src/index.ts" "$ISSUE_BODY"
+
+echo "[Worker] Files have been modified by the AI."
+
+echo "// Fix applied by Beav at $(date)" >> fix_log.txt
+
+echo "[Worker] Preparing commit..."
 git add .
 
 # SECURITY CHECK: Don't try to commit if nothing changed
