@@ -185,14 +185,10 @@ async function dispatchTasks(config: Workflow) {
   
     for (const task of taskToLaunch) {
         
-    launchWorker(task, config).catch((err) => {
+    launchTaskProcess(task, config).catch((err) => {
       console.error(`[Launcher] Critical failure for task ${task.id}:`, err);
     });
   }
-}
-
-async function launchWorker(task: Task, config: Workflow) {
-    await launchTaskProcess(task, config);
 }
 
 export async function tick(config: Workflow) {

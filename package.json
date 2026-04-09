@@ -9,7 +9,11 @@
     "dev:tracker": "pnpm -F @beav/tracker dev",
     "dev:orchestrator": "pnpm -F @beav/orchestrator dev",
     "dev:worker": "pnpm -F @beav/worker dev",
+    "format": "prettier --write .",
     "build": "pnpm -r build",
     "clean": "pnpm -r clean"
+  },
+  "devDependencies": {
+    "prettier": "^3.8.1"
   }
 }
