@@ -4,14 +4,24 @@ import type { InferSelectModel } from "drizzle-orm";
 
 export type Task = InferSelectModel<typeof tasks>;
 
+const optionalNumberFromEnv = (schema: z.ZodNumber) =>
+  z.preprocess((val) => {
+    if (val === undefined || val === null || val === "") {
+      return undefined;
+    }
+
+    const parsed = Number(val);
+    return Number.isNaN(parsed) ? val : parsed;
+  }, schema.optional());
+
 export const WorkflowSchema = z.object({
     ghToken: z.string().min(1, "Github Token is required"),
     repoOwner: z.string().min(1),
     repoName: z.string().min(1),
     issueTitle: z.string().default("autofix"),
-    maxConcurrent: z.preprocess((val) => Number(val), z.number().positive().default(3)),
-    pollIntervalMs: z.preprocess((val) => Number(val), z.number().min(5000).default(30000)),
-    thresholdMs: z.preprocess((val) => Number(val), z.number().default(45000)),
+    maxConcurrent: optionalNumberFromEnv(z.number().positive()).default(3),
+    pollIntervalMs: optionalNumberFromEnv(z.number().min(5000)).default(30000),
+    thresholdMs: optionalNumberFromEnv(z.number().positive()).default(45000),
     workspaceRoot: z.string().default("./workspaces")
 })
 

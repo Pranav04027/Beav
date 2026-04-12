@@ -2,15 +2,15 @@ import dotenv from "dotenv"
 dotenv.config()
 import { WorkflowSchema, type Workflow } from "./types.js"
 
-const rawConfig = {
-  ghToken: process.env.GITHUB_TOKEN,
-  repoOwner: process.env.REPO_OWNER,
-  repoName: process.env.REPO_NAME,
-  issueTitle: process.env.ISSUE_TITLE,
-  maxConcurrent: process.env.MAX_CONCURRENT,
-  pollIntervalMs: process.env.POLL_INTERVAL_MS,
-  thresholdMs: process.env.THRESHOLD_MS,
-  workspaceRoot: process.env.WORKSPACE_ROOT,
-};
-
-export const config = WorkflowSchema.parse(rawConfig)
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): Workflow {
+  return WorkflowSchema.parse({
+    ghToken: env.GITHUB_TOKEN,
+    repoOwner: env.REPO_OWNER,
+    repoName: env.REPO_NAME,
+    issueTitle: env.ISSUE_TITLE,
+    maxConcurrent: env.MAX_CONCURRENT,
+    pollIntervalMs: env.POLL_INTERVAL_MS,
+    thresholdMs: env.THRESHOLD_MS,
+    workspaceRoot: env.WORKSPACE_ROOT,
+  });
+}

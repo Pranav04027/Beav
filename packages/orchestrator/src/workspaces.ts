@@ -5,24 +5,27 @@ import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
 
-export async function setupWorkspace(taskId: string, htmlUrl: string, workspaceRoot: string) {
-  // 1. Resolve the absolute root and the target
+export async function setupWorkspace(
+  taskId: string,
+  repoOwner: string,
+  repoName: string,
+  workspaceRoot: string,
+) {
   const rootDir = path.resolve(workspaceRoot);
   const targetDir = path.resolve(rootDir, taskId);
 
-  // Ensure the resolved target actually sits INSIDE the root
-  if (!targetDir.startsWith(rootDir)) {
+  const relativeTarget = path.relative(rootDir, targetDir);
+  if (relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
     throw new Error(`SECURITY BREACH: Path traversal detected for ID ${taskId}`);
   }
 
-  // If the directory exists (from a previous failed attempt), wipe it
   await fs.rm(targetDir, { recursive: true, force: true });
   await fs.mkdir(targetDir, { recursive: true });
 
-  // 4. Execution (Shallow Clone)
-  console.log(`[Workspace] Cloning ${htmlUrl} into ${targetDir}...`);
+  const repoCloneUrl = `https://github.com/${repoOwner}/${repoName}.git`;
+  console.log(`[Workspace] Cloning ${repoCloneUrl} into ${targetDir}...`);
   try {
-    await execAsync(`git clone --depth 1 ${htmlUrl} .`, {
+    await execAsync(`git clone --depth 1 ${repoCloneUrl} .`, {
       cwd: targetDir,
     });
   } catch (err) {

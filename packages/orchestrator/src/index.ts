@@ -4,10 +4,15 @@ export * from "./tick.js";
 export * from "./workspaces.js";
 
 import { recoverOnStartup, tick } from "./tick.js";
-import { config , type Workflow} from "@beav/core"
+import type { Workflow } from "@beav/core";
 
-export async function start() {
+export async function start(workflow?: Workflow) {
+    const { loadConfig } = await import("@beav/core");
+    const activeWorkflow = workflow ?? loadConfig();
+
     await recoverOnStartup()
-    await tick(config)
-    setInterval(() => tick(config), config.pollIntervalMs)
+    await tick(activeWorkflow)
+    setInterval(() => {
+      void tick(activeWorkflow);
+    }, activeWorkflow.pollIntervalMs)
 }

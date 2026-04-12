@@ -2,10 +2,8 @@
   "auto_indent": false,
   "formatter": {
     "external": {
-      "command": "pnpm",
+      "command": "/home/pranav/projects/Beav/node_modules/.bin/prettier",
       "arguments": [
-        "exec",
-        "prettier",
         "--stdin-filepath",
         "{buffer_path}"
       ]

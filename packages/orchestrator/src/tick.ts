@@ -9,10 +9,9 @@ import {
   inArray,
   type Task,
 } from '@beav/core';
-import { config, type Workflow } from '@beav/core';
+import { type Workflow } from '@beav/core';
 import { fetchIssue } from '@beav/tracker';
 import { computeRetryDelayMs } from './retries.js';
-import { setupWorkspace } from './workspaces.js';
 import { launchTaskProcess } from './launcher.js';
 
 export async function recoverOnStartup() {
@@ -20,7 +19,7 @@ export async function recoverOnStartup() {
     const recovered = await tx
       .select()
       .from(tasks)
-      .where(eq(tasks.status, 'running'));
+      .where(inArray(tasks.status, ['claimed', 'running']));
     for (const task of recovered) {
       const sm = new TaskStateMachine(task.status);
       const next = sm.transitionTo('crashed');
@@ -37,6 +36,7 @@ export async function recoverOnStartup() {
           status: next,
           retryCount,
           nextRetryAt,
+          workerPid: null,
         })
         .where(eq(tasks.id, task.id));
     }
@@ -45,6 +45,19 @@ export async function recoverOnStartup() {
       console.log(`[Boot] Successfully recovered ${recovered.length} tasks.`);
     }
   });
+}
+
+async function killTask(pid: number) {
+  try {
+    process.kill(pid, 'SIGKILL');
+    console.log(`Successfully killed stale process ${pid}`);
+  } catch (error: any) {
+    if (error.code === 'ESRCH') {
+      console.log(`Process ${pid} not found (already dead).`);
+    } else {
+      console.error(`Unexpected error killing process ${pid}:`, error.message);
+    }
+  }
 }
 
 async function checkDeadTasksandUpdate(threshold: number) {
@@ -56,6 +69,10 @@ async function checkDeadTasksandUpdate(threshold: number) {
 
     for (const task of runningTasks) {
       if (task.lastHeartbeat != null && task.lastHeartbeat < threshold) {
+        const pid = task.workerPid;
+        if (pid) {
+          await killTask(pid);
+        }
         const sm = new TaskStateMachine(task.status);
         const retryCount = (task.retryCount ?? 0) + 1;
         const maxRetries = task.maxRetries ?? 0;
@@ -69,6 +86,7 @@ async function checkDeadTasksandUpdate(threshold: number) {
                 status: next,
                 retryCount,
                 nextRetryAt: null,
+                workerPid: null,
               })
               .where(eq(tasks.id, task.id));
           } catch {
@@ -83,6 +101,7 @@ async function checkDeadTasksandUpdate(threshold: number) {
                 status: next,
                 retryCount,
                 nextRetryAt: Date.now() + computeRetryDelayMs(retryCount),
+                workerPid: null,
               })
               .where(eq(tasks.id, task.id));
           } catch {
@@ -139,7 +158,7 @@ async function fetchCandidateIssue(config: Workflow) {
   const owner: string = config.repoOwner;
   const repo: string = config.repoName;
   const ghToken: string = config.ghToken;
-  const label: string = 'autofix';
+  const label: string = config.issueTitle;
   const fetchIssueResponse = await fetchIssue(owner, repo, label, ghToken);
 
   if (fetchIssueResponse.added > 0) {
@@ -162,6 +181,7 @@ async function fetchCandidateIssue(config: Workflow) {
   return fetchIssueResponse;
 }
 
+//
 async function dispatchTasks(config: Workflow) {
   const activeCount = await db
     .select({ count: sql<number>`count(*)` })
@@ -210,7 +230,7 @@ async function dispatchTasks(config: Workflow) {
   );
 
   for (const task of taskToLaunch) {
-      await launchTaskProcess(task, config).catch(console.error)
+    await launchTaskProcess(task, config).catch(console.error);
   }
 }
 
