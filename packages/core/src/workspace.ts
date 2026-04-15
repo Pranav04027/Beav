@@ -9,8 +9,8 @@ export async function setupWorkspace(
   taskId: string,
   repoOwner: string,
   repoName: string,
-  workspaceRoot: string,
-) {
+  workspaceRoot: string)
+{
   const rootDir = path.resolve(workspaceRoot);
   const targetDir = path.resolve(rootDir, taskId);
 

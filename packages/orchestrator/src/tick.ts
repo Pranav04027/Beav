@@ -181,7 +181,6 @@ async function fetchCandidateIssue(config: Workflow) {
   return fetchIssueResponse;
 }
 
-//
 async function dispatchTasks(config: Workflow) {
   const activeCount = await db
     .select({ count: sql<number>`count(*)` })

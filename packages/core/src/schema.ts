@@ -23,6 +23,9 @@ export const tasks = sqliteTable("tasks", {
     //Execution Data
     workspacePath: text("workspacePath"),
     workerPid: integer("workerPid"),
+    
+    threadId: text("threadId"),
+    turnId: text("turnId"),
 
     //Timestamps
     lastHeartbeat: integer("lastHeartbeat"),
