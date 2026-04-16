@@ -10,6 +10,7 @@ import {
   setupWorkspace,
   type Task,
 } from '@beav/core';
+import fs from 'node:fs/promises';
 import { type Workflow } from '@beav/core';
 import { fetchIssue } from '@beav/tracker';
 import { computeRetryDelayMs } from './retries.js';
@@ -38,8 +39,18 @@ export async function recoverOnStartup() {
           retryCount,
           nextRetryAt,
           workerPid: null,
+          workspacePath: null,
+          threadId: null,
+          turnId: null,
+          startedAt: null,
+          claimedAt: null,
+          lastHeartbeat: null,
         })
         .where(eq(tasks.id, task.id));
+
+      if (task.workspacePath) {
+        await fs.rm(task.workspacePath, { recursive: true, force: true });
+      }
     }
 
     if (recovered.length > 0) {
@@ -88,8 +99,18 @@ async function checkDeadTasksandUpdate(threshold: number) {
                 retryCount,
                 nextRetryAt: null,
                 workerPid: null,
+                workspacePath: null,
+                threadId: null,
+                turnId: null,
+                startedAt: null,
+                claimedAt: null,
+                lastHeartbeat: null,
               })
               .where(eq(tasks.id, task.id));
+
+            if (task.workspacePath) {
+              await fs.rm(task.workspacePath, { recursive: true, force: true });
+            }
           } catch {
             console.error(`A task reached max retries and failed: ${task.id}`);
           }
@@ -103,8 +124,18 @@ async function checkDeadTasksandUpdate(threshold: number) {
                 retryCount,
                 nextRetryAt: Date.now() + computeRetryDelayMs(retryCount),
                 workerPid: null,
+                workspacePath: null,
+                threadId: null,
+                turnId: null,
+                startedAt: null,
+                claimedAt: null,
+                lastHeartbeat: null,
               })
               .where(eq(tasks.id, task.id));
+
+            if (task.workspacePath) {
+              await fs.rm(task.workspacePath, { recursive: true, force: true });
+            }
           } catch {
             console.error(`Invalid transition for task ${task.id}`);
           }
@@ -140,8 +171,15 @@ async function requeueRetryableTasks(now: number) {
             startedAt: null,
             workerPid: null,
             lastHeartbeat: null,
+            workspacePath: null,
+            threadId: null,
+            turnId: null,
           })
           .where(eq(tasks.id, task.id));
+
+        if (task.workspacePath) {
+          await fs.rm(task.workspacePath, { recursive: true, force: true });
+        }
       } catch {
         console.error(`Failed to requeue task ${task.id}`);
       }

@@ -1,6 +1,7 @@
 console.log('worker');
 import { spawn } from 'node:child_process';
 import readline from 'node:readline';
+import fs from 'node:fs/promises';
 import { db } from '@beav/core';
 import { tasks, taskLogs } from '@beav/core';
 import { eq } from '@beav/core';
@@ -37,28 +38,51 @@ async function run() {
   const proc = spawn('codex', ['app-server'], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
-    
-  setTimeout(async () => {
+
+  setTimeout(
+    async () => {
       if (!completed) {
-      completed = true;
-      await db.update(tasks).set({
-        status: 'crashed',
-      }).where(eq(tasks.id, taskIdStr));
-  
-      proc.kill('SIGKILL');
-  
-      setTimeout(() => process.exit(1), 50);
-    }
-  }, 10 * 60 * 1000);
-    
+        completed = true;
+        await db
+          .update(tasks)
+          .set({
+            status: 'crashed',
+            workspacePath: null,
+            threadId: null,
+            turnId: null,
+          })
+          .where(eq(tasks.id, taskIdStr));
+
+        if (task.workspacePath) {
+          await fs.rm(task.workspacePath, { recursive: true, force: true });
+        }
+
+        proc.kill('SIGKILL');
+
+        setTimeout(() => process.exit(1), 50);
+      }
+    },
+    10 * 60 * 1000,
+  );
+
   proc.on('exit', async () => {
     if (!completed) {
       completed = true;
-  
-      await db.update(tasks).set({
-        status: 'crashed',
-      }).where(eq(tasks.id, taskIdStr));
-  
+
+      await db
+        .update(tasks)
+        .set({
+          status: 'crashed',
+          workspacePath: null,
+          threadId: null,
+          turnId: null,
+        })
+        .where(eq(tasks.id, taskIdStr));
+
+      if (task.workspacePath) {
+        await fs.rm(task.workspacePath, { recursive: true, force: true });
+      }
+
       process.exit(1);
     }
   });
@@ -96,8 +120,8 @@ async function run() {
     //Notifications (EVENTS)
 
     if (msg.method === 'agentMessage/delta') {
-      const text = msg.params?.delta || "";
-      
+      const text = msg.params?.delta || '';
+
       if (text.trim()) {
         await db.insert(taskLogs).values({
           taskId: taskIdStr,
@@ -119,8 +143,16 @@ async function run() {
           .update(tasks)
           .set({
             status: 'failed',
+            workspacePath: null,
+            threadId: null,
+            turnId: null,
           })
           .where(eq(tasks.id, taskIdStr));
+
+        if (task.workspacePath) {
+          await fs.rm(task.workspacePath, { recursive: true, force: true });
+        }
+
         proc.kill('SIGKILL');
         setTimeout(() => process.exit(1), 50);
       }
@@ -132,8 +164,16 @@ async function run() {
             .update(tasks)
             .set({
               status: 'failed',
+              workspacePath: null,
+              threadId: null,
+              turnId: null,
             })
             .where(eq(tasks.id, taskIdStr));
+
+          if (task.workspacePath) {
+            await fs.rm(task.workspacePath, { recursive: true, force: true });
+          }
+
           proc.kill('SIGKILL');
           setTimeout(() => process.exit(1), 50);
         }
@@ -142,8 +182,16 @@ async function run() {
           .update(tasks)
           .set({
             status: 'failed',
+            workspacePath: null,
+            threadId: null,
+            turnId: null,
           })
           .where(eq(tasks.id, taskIdStr));
+
+        if (task.workspacePath) {
+          await fs.rm(task.workspacePath, { recursive: true, force: true });
+        }
+
         proc.kill('SIGKILL');
         setTimeout(() => process.exit(1), 50);
       }
@@ -153,8 +201,15 @@ async function run() {
         .set({
           status: 'verifying',
           completedAt: Date.now(),
+          workspacePath: null,
+          threadId: null,
+          turnId: null,
         })
         .where(eq(tasks.id, taskIdStr));
+
+      if (task.workspacePath) {
+        await fs.rm(task.workspacePath, { recursive: true, force: true });
+      }
 
       proc.kill('SIGKILL');
       setTimeout(() => process.exit(1), 50);
