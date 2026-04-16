@@ -34,55 +34,31 @@ async function run() {
     process.exit(1);
   }
 
-  //start Codex
   const proc = spawn('codex', ['app-server'], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
 
-  setTimeout(
-    async () => {
-      if (!completed) {
-        completed = true;
-        await db
-          .update(tasks)
-          .set({
-            status: 'crashed',
-            workspacePath: null,
-            threadId: null,
-            turnId: null,
-          })
-          .where(eq(tasks.id, taskIdStr));
+  const sendHeartbeat = async () => {
+    await db
+      .update(tasks)
+      .set({ lastHeartbeat: Date.now() })
+      .where(eq(tasks.id, taskIdStr));
+  };
 
-        if (task.workspacePath) {
-          await fs.rm(task.workspacePath, { recursive: true, force: true });
-        }
+  const cleanup = async () => {
+    if (task.workspacePath) {
+      await fs.rm(task.workspacePath, { recursive: true, force: true });
+    }
+    proc.kill('SIGKILL');
+    setTimeout(() => process.exit(1), 50);
+  };
 
-        proc.kill('SIGKILL');
+  const heartbeatInterval = setInterval(sendHeartbeat, 15 * 1000);
 
-        setTimeout(() => process.exit(1), 50);
-      }
-    },
-    10 * 60 * 1000,
-  );
-
-  proc.on('exit', async () => {
+  proc.on('exit', () => {
     if (!completed) {
       completed = true;
-
-      await db
-        .update(tasks)
-        .set({
-          status: 'crashed',
-          workspacePath: null,
-          threadId: null,
-          turnId: null,
-        })
-        .where(eq(tasks.id, taskIdStr));
-
-      if (task.workspacePath) {
-        await fs.rm(task.workspacePath, { recursive: true, force: true });
-      }
-
+      clearInterval(heartbeatInterval);
       process.exit(1);
     }
   });
@@ -136,6 +112,7 @@ async function run() {
     if (msg.method === 'turn/completed') {
       if (completed) return;
       completed = true;
+      clearInterval(heartbeatInterval);
       const status = msg.params?.turn?.status;
 
       if (status === 'failed') {
@@ -149,12 +126,8 @@ async function run() {
           })
           .where(eq(tasks.id, taskIdStr));
 
-        if (task.workspacePath) {
-          await fs.rm(task.workspacePath, { recursive: true, force: true });
-        }
-
-        proc.kill('SIGKILL');
-        setTimeout(() => process.exit(1), 50);
+        await cleanup();
+        return;
       }
 
       try {
@@ -170,12 +143,8 @@ async function run() {
             })
             .where(eq(tasks.id, taskIdStr));
 
-          if (task.workspacePath) {
-            await fs.rm(task.workspacePath, { recursive: true, force: true });
-          }
-
-          proc.kill('SIGKILL');
-          setTimeout(() => process.exit(1), 50);
+          await cleanup();
+          return;
         }
       } catch (err) {
         await db
@@ -188,12 +157,8 @@ async function run() {
           })
           .where(eq(tasks.id, taskIdStr));
 
-        if (task.workspacePath) {
-          await fs.rm(task.workspacePath, { recursive: true, force: true });
-        }
-
-        proc.kill('SIGKILL');
-        setTimeout(() => process.exit(1), 50);
+        await cleanup();
+        return;
       }
 
       await db
@@ -207,12 +172,7 @@ async function run() {
         })
         .where(eq(tasks.id, taskIdStr));
 
-      if (task.workspacePath) {
-        await fs.rm(task.workspacePath, { recursive: true, force: true });
-      }
-
-      proc.kill('SIGKILL');
-      setTimeout(() => process.exit(1), 50);
+      await cleanup();
     }
   });
 
