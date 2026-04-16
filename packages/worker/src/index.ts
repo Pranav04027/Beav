@@ -21,6 +21,8 @@ const nextId = (): number => {
 
 const pending = new Map<number, (res: any) => void>();
 
+let completed = false;
+
 async function run() {
   const task = await db.query.tasks.findFirst({
     where: eq(tasks.id, taskIdStr),
@@ -34,6 +36,31 @@ async function run() {
   //start Codex
   const proc = spawn('codex', ['app-server'], {
     stdio: ['pipe', 'pipe', 'inherit'],
+  });
+    
+  setTimeout(async () => {
+      if (!completed) {
+      completed = true;
+      await db.update(tasks).set({
+        status: 'crashed',
+      }).where(eq(tasks.id, taskIdStr));
+  
+      proc.kill('SIGKILL');
+  
+      setTimeout(() => process.exit(1), 50);
+    }
+  }, 10 * 60 * 1000);
+    
+  proc.on('exit', async () => {
+    if (!completed) {
+      completed = true;
+  
+      await db.update(tasks).set({
+        status: 'crashed',
+      }).where(eq(tasks.id, taskIdStr));
+  
+      process.exit(1);
+    }
   });
 
   const rl = readline.createInterface({ input: proc.stdout });
@@ -49,7 +76,12 @@ async function run() {
   };
 
   rl.on('line', async (line) => {
-    const msg = JSON.parse(line);
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch {
+      return;
+    }
 
     //Response
     if (msg.id !== undefined) {
@@ -63,18 +95,59 @@ async function run() {
 
     //Notifications (EVENTS)
 
-    if (msg.method === "agentMessage/delta") {
-      await db.insert(taskLogs).values({
-        taskId: taskIdStr,
-        stream: 'system',
-        line: JSON.stringify(msg),
-        ts: Date.now(),
-      });
+    if (msg.method === 'agentMessage/delta') {
+      const text = msg.params?.delta || "";
+      
+      if (text.trim()) {
+        await db.insert(taskLogs).values({
+          taskId: taskIdStr,
+          stream: 'system',
+          line: text,
+          ts: Date.now(),
+        });
+      }
     }
 
     // Turn finished
-      if (msg.method === 'turn/completed') {
-      
+    if (msg.method === 'turn/completed') {
+      if (completed) return;
+      completed = true;
+      const status = msg.params?.turn?.status;
+
+      if (status === 'failed') {
+        await db
+          .update(tasks)
+          .set({
+            status: 'failed',
+          })
+          .where(eq(tasks.id, taskIdStr));
+        proc.kill('SIGKILL');
+        setTimeout(() => process.exit(1), 50);
+      }
+
+      try {
+        const created = await createPR(task);
+        if (!created) {
+          await db
+            .update(tasks)
+            .set({
+              status: 'failed',
+            })
+            .where(eq(tasks.id, taskIdStr));
+          proc.kill('SIGKILL');
+          setTimeout(() => process.exit(1), 50);
+        }
+      } catch (err) {
+        await db
+          .update(tasks)
+          .set({
+            status: 'failed',
+          })
+          .where(eq(tasks.id, taskIdStr));
+        proc.kill('SIGKILL');
+        setTimeout(() => process.exit(1), 50);
+      }
+
       await db
         .update(tasks)
         .set({
@@ -83,7 +156,8 @@ async function run() {
         })
         .where(eq(tasks.id, taskIdStr));
 
-      process.exit(0);
+      proc.kill('SIGKILL');
+      setTimeout(() => process.exit(1), 50);
     }
   });
 
@@ -108,49 +182,49 @@ async function run() {
   const threadId = threadRes.thread.id;
 
   // 💬 Start turn (THIS replaces your whole agent loop)
-  await send('turn/start', {
+  const turnRes: any = await send('turn/start', {
     threadId,
     input: [
       {
         type: 'text',
         text: `
         You are an autonomous software engineer.
-        
+
         Goal:
         Fix the GitHub issue described below.
-        
+
         Constraints:
         - Make minimal, correct changes
         - Do NOT break existing functionality
         - Ensure all tests pass
         - If tests fail, fix them
         - Do NOT create pull requests or push changes
-        
+
         Process:
         1. Understand the issue
         2. Locate relevant code
         3. Implement fix
         4. Run tests
-        5. Clean workspace before retry
-           VERY IMPORTANT:
-           Before retry:
-           - git reset --hard
-           - git clean -fd
-        6. Iterate until tests pass
-        
+        5. Iterate until tests pass
+
         Output:
         - Modify files directly in the workspace
         - Ensure repository is in a clean working state
-        
+
         Issue:
         Title: ${task.issueTitle}
-        
+
         Body:
         ${task.body}
         `,
       },
     ],
   });
+
+  await db
+    .update(tasks)
+    .set({ threadId: threadId, turnId: turnRes.turn.id })
+    .where(eq(tasks.id, taskIdStr));
 }
 
 run();
