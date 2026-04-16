@@ -4,16 +4,12 @@ import { tasks } from "@beav/core";
 import { eq } from "drizzle-orm";
 
 export async function launchTaskProcess(taskId: string) {
-  const proc = spawn(
-    "node",
-    ["packages/worker/dist/index.js", taskId],
-    {
+  const proc = spawn( "node", ["packages/worker/dist/index.js", taskId],{
       stdio: "inherit",
     }
   );
 
-  await db
-    .update(tasks)
+  await db.update(tasks)
     .set({
       workerPid: proc.pid,
       status: "running",

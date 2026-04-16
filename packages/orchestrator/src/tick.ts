@@ -229,7 +229,7 @@ async function dispatchTasks(config: Workflow) {
   );
 
   for (const task of taskToLaunch) {
-    await launchTaskProcess(task, config).catch(console.error);
+    await launchTaskProcess(task.id).catch(console.error);
   }
 }
 
