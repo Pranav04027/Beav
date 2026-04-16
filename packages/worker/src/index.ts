@@ -4,8 +4,10 @@ import readline from 'node:readline';
 import { db } from '@beav/core';
 import { tasks, taskLogs } from '@beav/core';
 import { eq } from '@beav/core';
+import { createPR } from './gitcommands.js';
 
 const taskId = process.argv[2];
+
 if (!taskId) {
   console.error('Task ID not provided');
   process.exit(1);
@@ -60,15 +62,19 @@ async function run() {
     }
 
     //Notifications (EVENTS)
-    await db.insert(taskLogs).values({
-      taskId: taskIdStr,
-      stream: 'system',
-      line: JSON.stringify(msg),
-      ts: Date.now(),
-    });
+
+    if (msg.method === "agentMessage/delta") {
+      await db.insert(taskLogs).values({
+        taskId: taskIdStr,
+        stream: 'system',
+        line: JSON.stringify(msg),
+        ts: Date.now(),
+      });
+    }
 
     // Turn finished
-    if (msg.method === 'turn/completed') {
+      if (msg.method === 'turn/completed') {
+      
       await db
         .update(tasks)
         .set({
@@ -108,14 +114,39 @@ async function run() {
       {
         type: 'text',
         text: `
-Fix this GitHub issue:
-
-Title: ${task.issueTitle}
-
-Body:
-${task.body}
-
-Make code changes, run tests, and create a PR.
+        You are an autonomous software engineer.
+        
+        Goal:
+        Fix the GitHub issue described below.
+        
+        Constraints:
+        - Make minimal, correct changes
+        - Do NOT break existing functionality
+        - Ensure all tests pass
+        - If tests fail, fix them
+        - Do NOT create pull requests or push changes
+        
+        Process:
+        1. Understand the issue
+        2. Locate relevant code
+        3. Implement fix
+        4. Run tests
+        5. Clean workspace before retry
+           VERY IMPORTANT:
+           Before retry:
+           - git reset --hard
+           - git clean -fd
+        6. Iterate until tests pass
+        
+        Output:
+        - Modify files directly in the workspace
+        - Ensure repository is in a clean working state
+        
+        Issue:
+        Title: ${task.issueTitle}
+        
+        Body:
+        ${task.body}
         `,
       },
     ],

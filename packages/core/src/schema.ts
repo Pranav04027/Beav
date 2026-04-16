@@ -24,6 +24,7 @@ export const tasks = sqliteTable("tasks", {
     workspacePath: text("workspacePath"),
     workerPid: integer("workerPid"),
     
+    //codex server pid
     threadId: text("threadId"),
     turnId: text("turnId"),
 

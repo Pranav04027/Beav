@@ -7,6 +7,7 @@ import {
   and,
   lt,
   inArray,
+  setupWorkspace,
   type Task,
 } from '@beav/core';
 import { type Workflow } from '@beav/core';
@@ -229,7 +230,49 @@ async function dispatchTasks(config: Workflow) {
   );
 
   for (const task of taskToLaunch) {
-    await launchTaskProcess(task.id).catch(console.error);
+    try {
+      const workspacePath = await setupWorkspace(
+        task.id,
+        task.repoOwner,
+        task.repoName,
+        config.workspaceRoot,
+      );
+
+      await db
+        .update(tasks)
+        .set({
+          workspacePath,
+        })
+        .where(eq(tasks.id, task.id));
+
+      const workerid = await launchTaskProcess(task.id);
+      console.log(`Launched task:${task.id} with worker: ${workerid}`);
+    } catch (error) {
+      console.error(`[Dispatcher] Failed to prepare task ${task.id}:`, error);
+
+      const retryCount = (task.retryCount ?? 0) + 1;
+      const maxRetries = task.maxRetries ?? 0;
+      const nextStatus = new TaskStateMachine(task.status).transitionTo(
+        'crashed',
+      );
+
+      await db
+        .update(tasks)
+        .set({
+          status: nextStatus,
+          retryCount,
+          nextRetryAt:
+            retryCount >= maxRetries
+              ? null
+              : Date.now() + computeRetryDelayMs(retryCount),
+          workerPid: null,
+          workspacePath: null,
+          claimedAt: null,
+          startedAt: null,
+          lastHeartbeat: null,
+        })
+        .where(eq(tasks.id, task.id));
+    }
   }
 }
 
