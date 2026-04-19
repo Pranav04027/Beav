@@ -27,6 +27,11 @@ export const tasks = sqliteTable("tasks", {
     //codex server pid
     threadId: text("threadId"),
     turnId: text("turnId"),
+    
+    //PR check data
+    prURL: text("prURL"),
+    prNumber: integer("prNumber"),
+    commitSha: text("commitSha"),
 
     //Timestamps
     lastHeartbeat: integer("lastHeartbeat"),

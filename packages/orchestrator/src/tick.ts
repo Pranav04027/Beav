@@ -15,6 +15,7 @@ import { type Workflow } from '@beav/core';
 import { fetchIssue } from '@beav/tracker';
 import { computeRetryDelayMs } from './retries.js';
 import { launchTaskProcess } from './launcher.js';
+import { checkVerifyingTasks } from '@beav/tracker';
 
 export async function recoverOnStartup() {
   await db.transaction(async (tx) => {
@@ -314,6 +315,10 @@ async function dispatchTasks(config: Workflow) {
   }
 }
 
+async function VerifyTasks(config: Workflow) {
+  await checkVerifyingTasks(config);
+}
+
 export async function tick(config: Workflow) {
   console.log(`\nTick Start: ${new Date().toLocaleTimeString()}`);
 
@@ -327,8 +332,7 @@ export async function tick(config: Workflow) {
 
     await dispatchTasks(config);
 
-    // 4. (Day 4) The Gatekeeper: Check CI status for 'verifying' tasks
-    // await checkVerifyingTasks(workflowConfig);
+    await VerifyTasks(config);
   } catch (error) {
     console.error('CRITICAL TICK ERROR', error);
   }
