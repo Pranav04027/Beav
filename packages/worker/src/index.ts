@@ -1,65 +1,137 @@
 console.log('worker');
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import readline from 'node:readline';
 import fs from 'node:fs/promises';
-import { db } from '@beav/core';
-import { tasks, taskLogs } from '@beav/core';
-import { eq } from '@beav/core';
+import type { Readable, Writable } from 'node:stream';
+import { db, eq, tasks, taskLogs, type Task } from '@beav/core';
 import { createPR } from './gitcommands.js';
 
 const taskId = process.argv[2];
 
-if (!taskId) {
-  console.error('Task ID not provided');
-  process.exit(1);
-}
-const taskIdStr: string = taskId;
-
 let rpcId = 0;
-const nextId = (): number => {
-  return ++rpcId;
-};
+const nextId = (): number => ++rpcId;
 
 const pending = new Map<number, (res: any) => void>();
 
-let completed = false;
+async function markTaskFailed(taskIdStr: string) {
+  await db
+    .update(tasks)
+    .set({
+      status: 'failed',
+      workspacePath: null,
+      threadId: null,
+      turnId: null,
+    })
+    .where(eq(tasks.id, taskIdStr));
+}
 
-async function run() {
+type WorkerProc = ChildProcessByStdio<Writable, Readable, null>;
+
+async function cleanupTask(proc: WorkerProc, task: Task) {
+  if (task.workspacePath) {
+    await fs.rm(task.workspacePath, { recursive: true, force: true });
+  }
+
+  try {
+    proc.kill('SIGKILL');
+  } catch (error) {
+    console.error('Failed to kill worker child process:', error);
+  }
+}
+
+async function run(taskIdStr: string) {
   const task = await db.query.tasks.findFirst({
     where: eq(tasks.id, taskIdStr),
   });
 
   if (!task) {
-    console.error('Task not found');
-    process.exit(1);
+    throw new Error(`Task not found: ${taskIdStr}`);
   }
 
-  const proc = spawn('codex', ['app-server'], {
+  if (!task.workspacePath) {
+    throw new Error(`Task ${taskIdStr} is missing workspacePath`);
+  }
+
+  const proc: WorkerProc = spawn('codex', ['app-server'], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
 
-  const sendHeartbeat = async () => {
-    await db
+  const heartbeatInterval = setInterval(() => {
+    void db
       .update(tasks)
       .set({ lastHeartbeat: Date.now() })
-      .where(eq(tasks.id, taskIdStr));
-  };
+      .where(eq(tasks.id, taskIdStr))
+      .catch((error) => {
+        console.error('Heartbeat update failed:', error);
+      });
+  }, 15 * 1000);
 
-  const cleanup = async () => {
-    if (task.workspacePath) {
-      await fs.rm(task.workspacePath, { recursive: true, force: true });
+  let completed = false;
+  let cleanedUp = false;
+
+  const finalizeFailure = async (error: unknown) => {
+    if (completed) return;
+    completed = true;
+    clearInterval(heartbeatInterval);
+
+    console.error('Worker failed:', error);
+
+    try {
+      await db.insert(taskLogs).values({
+        taskId: taskIdStr,
+        stream: 'system',
+        line: `worker error: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        ts: Date.now(),
+      });
+    } catch (logError) {
+      console.error('Failed to persist worker error log:', logError);
     }
-    proc.kill('SIGKILL');
-    setTimeout(() => process.exit(1), 50);
+
+    try {
+      await markTaskFailed(taskIdStr);
+    } finally {
+      if (!cleanedUp) {
+        cleanedUp = true;
+        try {
+          await cleanupTask(proc, task);
+        } catch (cleanupError) {
+          console.error('Cleanup after failure failed:', cleanupError);
+        }
+      }
+    }
   };
 
-  const heartbeatInterval = setInterval(sendHeartbeat, 15 * 1000);
+  const finalizeSuccess = async () => {
+    if (completed) return;
+    completed = true;
+    clearInterval(heartbeatInterval);
+
+    await db
+      .update(tasks)
+      .set({
+        status: 'verifying',
+        completedAt: Date.now(),
+        workspacePath: null,
+        threadId: null,
+        turnId: null,
+      })
+      .where(eq(tasks.id, taskIdStr));
+
+    if (!cleanedUp) {
+      cleanedUp = true;
+      await cleanupTask(proc, task);
+    }
+  };
 
   proc.on('exit', () => {
     if (!completed) {
-      completed = true;
-      clearInterval(heartbeatInterval);
-      process.exit(1);
+      void finalizeFailure(
+        new Error('codex app-server exited unexpectedly'),
+      ).finally(() => {
+        process.exit(1);
+      });
     }
   });
 
@@ -75,7 +147,7 @@ async function run() {
     });
   };
 
-  rl.on('line', async (line) => {
+  const handleLine = async (line: string) => {
     let msg;
     try {
       msg = JSON.parse(line);
@@ -83,7 +155,6 @@ async function run() {
       return;
     }
 
-    //Response
     if (msg.id !== undefined) {
       const resolve = pending.get(msg.id);
       if (resolve) {
@@ -92,8 +163,6 @@ async function run() {
       }
       return;
     }
-
-    //Notifications (EVENTS)
 
     if (msg.method === 'agentMessage/delta') {
       const text = msg.params?.delta || '';
@@ -108,101 +177,61 @@ async function run() {
       }
     }
 
-    // Turn finished
     if (msg.method === 'turn/completed') {
-      if (completed) return;
-      completed = true;
-      clearInterval(heartbeatInterval);
       const status = msg.params?.turn?.status;
 
       if (status === 'failed') {
-        await db
-          .update(tasks)
-          .set({
-            status: 'failed',
-            workspacePath: null,
-            threadId: null,
-            turnId: null,
-          })
-          .where(eq(tasks.id, taskIdStr));
-
-        await cleanup();
+        await finalizeFailure(new Error('Agent turn completed with failed status'));
         return;
       }
 
-      try {
-        const created = await createPR(task);
-        if (!created) {
-          await db
-            .update(tasks)
-            .set({
-              status: 'failed',
-              workspacePath: null,
-              threadId: null,
-              turnId: null,
-            })
-            .where(eq(tasks.id, taskIdStr));
-
-          await cleanup();
-          return;
-        }
-      } catch (err) {
-        await db
-          .update(tasks)
-          .set({
-            status: 'failed',
-            workspacePath: null,
-            threadId: null,
-            turnId: null,
-          })
-          .where(eq(tasks.id, taskIdStr));
-
-        await cleanup();
+      const created = await createPR(task);
+      if (!created) {
+        await finalizeFailure(new Error('createPR returned false'));
         return;
       }
 
-      await db
-        .update(tasks)
-        .set({
-          status: 'verifying',
-          completedAt: Date.now(),
-          workspacePath: null,
-          threadId: null,
-          turnId: null,
-        })
-        .where(eq(tasks.id, taskIdStr));
-
-      await cleanup();
+      await finalizeSuccess();
+      process.exit(0);
     }
+  };
+
+  rl.on('line', (line) => {
+    void handleLine(line).catch((error) => {
+      void finalizeFailure(error).finally(() => {
+        process.exit(1);
+      });
+    });
   });
 
-  //INIT FLOW
-  await send('initialize', {
-    clientInfo: {
-      name: 'beav-worker',
-      version: '0.1.0',
-    },
-  });
+  try {
+    await send('initialize', {
+      clientInfo: {
+        name: 'beav-worker',
+        version: '0.1.0',
+      },
+    });
 
-  proc.stdin.write(
-    JSON.stringify({ method: 'initialized', params: {} }) + '\n',
-  );
+    proc.stdin.write(
+      JSON.stringify({ method: 'initialized', params: {} }) + '\n',
+    );
 
-  // 🧵 Create thread
-  const threadRes: any = await send('thread/start', {
-    model: 'gpt-5.4',
-    cwd: task.workspacePath,
-  });
+    const threadRes: any = await send('thread/start', {
+      model: 'gpt-5.4',
+      cwd: task.workspacePath,
+    });
 
-  const threadId = threadRes.thread.id;
+    const threadId = threadRes?.thread?.id;
+    if (!threadId) {
+      throw new Error('thread/start did not return thread.id');
+    }
 
-  // 💬 Start turn (THIS replaces your whole agent loop)
-  const turnRes: any = await send('turn/start', {
-    threadId,
-    input: [
-      {
-        type: 'text',
-        text: `
+    const turnRes: any = await send('turn/start', {
+      threadId,
+      input: [
+        {
+          type: 'text',
+          text: `
         You are an autonomous software engineer.
 
         Goal:
@@ -232,14 +261,43 @@ async function run() {
         Body:
         ${task.body}
         `,
-      },
-    ],
-  });
+        },
+      ],
+    });
 
-  await db
-    .update(tasks)
-    .set({ threadId: threadId, turnId: turnRes.turn.id })
-    .where(eq(tasks.id, taskIdStr));
+    const turnId = turnRes?.turn?.id;
+    if (!turnId) {
+      throw new Error('turn/start did not return turn.id');
+    }
+
+    await db
+      .update(tasks)
+      .set({ threadId, turnId })
+      .where(eq(tasks.id, taskIdStr));
+  } catch (error) {
+    await finalizeFailure(error);
+    process.exit(1);
+  }
 }
 
-run();
+async function main() {
+  if (!taskId) {
+    throw new Error('Task ID not provided');
+  }
+
+  await run(taskId);
+}
+
+void main().catch(async (error) => {
+  console.error('Uncaught top-level promise rejection:', error);
+
+  if (taskId) {
+    try {
+      await markTaskFailed(taskId);
+    } catch (dbError) {
+      console.error('Failed to mark task as failed:', dbError);
+    }
+  }
+
+  process.exit(1);
+});

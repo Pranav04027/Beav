@@ -76,7 +76,7 @@ async function mark(id: string, status: "done" | "failed") {
 
 export async function checkVerifyingTasks(config: Workflow) {
   const octokit = new Octokit({
-    auth: config.ghToken,
+    auth: config.ghToken
   });
 
   const verifying = await db.query.tasks.findMany({
