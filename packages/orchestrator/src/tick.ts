@@ -18,6 +18,8 @@ import { launchTaskProcess } from './launcher.js';
 import { checkVerifyingTasks } from '@beav/tracker';
 
 export async function recoverOnStartup() {
+  const workspacesToRemove: string[] = [];
+
   await db.transaction(async (tx) => {
     const recovered = await tx
       .select()
@@ -50,7 +52,7 @@ export async function recoverOnStartup() {
         .where(eq(tasks.id, task.id));
 
       if (task.workspacePath) {
-        await fs.rm(task.workspacePath, { recursive: true, force: true });
+        workspacesToRemove.push(task.workspacePath);
       }
     }
 
@@ -58,6 +60,10 @@ export async function recoverOnStartup() {
       console.log(`[Boot] Successfully recovered ${recovered.length} tasks.`);
     }
   });
+
+  for (const workspacePath of workspacesToRemove) {
+    await fs.rm(workspacePath, { recursive: true, force: true });
+  }
 }
 
 async function killTask(pid: number) {
@@ -74,6 +80,8 @@ async function killTask(pid: number) {
 }
 
 async function checkDeadTasksandUpdate(threshold: number) {
+  const workspacesToRemove: string[] = [];
+
   await db.transaction(async (tx) => {
     const runningTasks = await tx
       .select()
@@ -110,7 +118,7 @@ async function checkDeadTasksandUpdate(threshold: number) {
               .where(eq(tasks.id, task.id));
 
             if (task.workspacePath) {
-              await fs.rm(task.workspacePath, { recursive: true, force: true });
+              workspacesToRemove.push(task.workspacePath);
             }
           } catch {
             console.error(`A task reached max retries and failed: ${task.id}`);
@@ -135,7 +143,7 @@ async function checkDeadTasksandUpdate(threshold: number) {
               .where(eq(tasks.id, task.id));
 
             if (task.workspacePath) {
-              await fs.rm(task.workspacePath, { recursive: true, force: true });
+              workspacesToRemove.push(task.workspacePath);
             }
           } catch {
             console.error(`Invalid transition for task ${task.id}`);
@@ -144,9 +152,15 @@ async function checkDeadTasksandUpdate(threshold: number) {
       }
     }
   });
+
+  for (const workspacePath of workspacesToRemove) {
+    await fs.rm(workspacePath, { recursive: true, force: true });
+  }
 }
 
 async function requeueRetryableTasks(now: number) {
+  const workspacesToRemove: string[] = [];
+
   await db.transaction(async (tx) => {
     const retryableTasks = await tx
       .select()
@@ -179,7 +193,7 @@ async function requeueRetryableTasks(now: number) {
           .where(eq(tasks.id, task.id));
 
         if (task.workspacePath) {
-          await fs.rm(task.workspacePath, { recursive: true, force: true });
+          workspacesToRemove.push(task.workspacePath);
         }
       } catch {
         console.error(`Failed to requeue task ${task.id}`);
@@ -192,6 +206,10 @@ async function requeueRetryableTasks(now: number) {
       );
     }
   });
+
+  for (const workspacePath of workspacesToRemove) {
+    await fs.rm(workspacePath, { recursive: true, force: true });
+  }
 }
 
 async function fetchCandidateIssue(config: Workflow) {
@@ -284,7 +302,10 @@ async function dispatchTasks(config: Workflow) {
         })
         .where(eq(tasks.id, task.id));
 
-      const workerid = await launchTaskProcess(task.id);
+      const workerid = await launchTaskProcess({
+        ...task,
+        workspacePath,
+      });
       console.log(`Launched task:${task.id} with worker: ${workerid}`);
     } catch (error) {
       console.error(`[Dispatcher] Failed to prepare task ${task.id}:`, error);

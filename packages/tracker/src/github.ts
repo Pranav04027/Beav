@@ -35,7 +35,7 @@ export async function fetchIssue(
         htmlUrl: issue.html_url,
         repoOwner: owner,
         repoName: repo,
-        body: issue.body || '',
+        body: issue.body || null,
       });
 
       if (!clean.success) {

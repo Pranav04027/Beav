@@ -1,31 +1,54 @@
 console.log('worker');
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
-import readline from 'node:readline';
 import fs from 'node:fs/promises';
+import readline from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
-import { db, eq, tasks, taskLogs, type Task } from '@beav/core';
+import { type Task, type WorkerEvent } from '@beav/core';
 import { createPR } from './gitcommands.js';
 
-const taskId = process.argv[2];
+type WorkerProc = ChildProcessByStdio<Writable, Readable, null>;
 
 let rpcId = 0;
 const nextId = (): number => ++rpcId;
 
 const pending = new Map<number, (res: any) => void>();
 
-async function markTaskFailed(taskIdStr: string) {
-  await db
-    .update(tasks)
-    .set({
-      status: 'failed',
-      workspacePath: null,
-      threadId: null,
-      turnId: null,
-    })
-    .where(eq(tasks.id, taskIdStr));
+function readTaskFromEnv(): Task {
+  const rawTask = process.env.BEAV_WORKER_TASK;
+
+  if (!rawTask) {
+    throw new Error('BEAV_WORKER_TASK is required');
+  }
+
+  const task = JSON.parse(rawTask) as Task;
+
+  if (!task.id) {
+    throw new Error('BEAV_WORKER_TASK is missing task.id');
+  }
+
+  if (!task.workspacePath) {
+    throw new Error(`Task ${task.id} is missing workspacePath`);
+  }
+
+  return task;
 }
 
-type WorkerProc = ChildProcessByStdio<Writable, Readable, null>;
+function sendParentEvent(event: WorkerEvent): Promise<void> {
+  if (typeof process.send !== 'function') {
+    throw new Error('Worker must be started with an IPC channel');
+  }
+
+  return new Promise((resolve, reject) => {
+    process.send?.(event, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
 
 async function cleanupTask(proc: WorkerProc, task: Task) {
   if (task.workspacePath) {
@@ -39,31 +62,19 @@ async function cleanupTask(proc: WorkerProc, task: Task) {
   }
 }
 
-async function run(taskIdStr: string) {
-  const task = await db.query.tasks.findFirst({
-    where: eq(tasks.id, taskIdStr),
-  });
-
-  if (!task) {
-    throw new Error(`Task not found: ${taskIdStr}`);
-  }
-
-  if (!task.workspacePath) {
-    throw new Error(`Task ${taskIdStr} is missing workspacePath`);
-  }
-
+async function run(task: Task) {
   const proc: WorkerProc = spawn('codex', ['app-server'], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
 
   const heartbeatInterval = setInterval(() => {
-    void db
-      .update(tasks)
-      .set({ lastHeartbeat: Date.now() })
-      .where(eq(tasks.id, taskIdStr))
-      .catch((error) => {
-        console.error('Heartbeat update failed:', error);
-      });
+    void sendParentEvent({
+      type: 'heartbeat',
+      taskId: task.id,
+      ts: Date.now(),
+    }).catch((error) => {
+      console.error('Heartbeat send failed:', error);
+    });
   }, 15 * 1000);
 
   let completed = false;
@@ -77,20 +88,14 @@ async function run(taskIdStr: string) {
     console.error('Worker failed:', error);
 
     try {
-      await db.insert(taskLogs).values({
-        taskId: taskIdStr,
-        stream: 'system',
-        line: `worker error: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+      await sendParentEvent({
+        type: 'failed',
+        taskId: task.id,
+        error: error instanceof Error ? error.message : String(error),
         ts: Date.now(),
       });
-    } catch (logError) {
-      console.error('Failed to persist worker error log:', logError);
-    }
-
-    try {
-      await markTaskFailed(taskIdStr);
+    } catch (sendError) {
+      console.error('Failed to send worker failure event:', sendError);
     } finally {
       if (!cleanedUp) {
         cleanedUp = true;
@@ -108,16 +113,11 @@ async function run(taskIdStr: string) {
     completed = true;
     clearInterval(heartbeatInterval);
 
-    await db
-      .update(tasks)
-      .set({
-        status: 'verifying',
-        completedAt: Date.now(),
-        workspacePath: null,
-        threadId: null,
-        turnId: null,
-      })
-      .where(eq(tasks.id, taskIdStr));
+    await sendParentEvent({
+      type: 'completed',
+      taskId: task.id,
+      completedAt: Date.now(),
+    });
 
     if (!cleanedUp) {
       cleanedUp = true;
@@ -168,8 +168,9 @@ async function run(taskIdStr: string) {
       const text = msg.params?.delta || '';
 
       if (text.trim()) {
-        await db.insert(taskLogs).values({
-          taskId: taskIdStr,
+        await sendParentEvent({
+          type: 'log',
+          taskId: task.id,
           stream: 'system',
           line: text,
           ts: Date.now(),
@@ -270,10 +271,12 @@ async function run(taskIdStr: string) {
       throw new Error('turn/start did not return turn.id');
     }
 
-    await db
-      .update(tasks)
-      .set({ threadId, turnId })
-      .where(eq(tasks.id, taskIdStr));
+    await sendParentEvent({
+      type: 'thread-state',
+      taskId: task.id,
+      threadId,
+      turnId,
+    });
   } catch (error) {
     await finalizeFailure(error);
     process.exit(1);
@@ -281,22 +284,23 @@ async function run(taskIdStr: string) {
 }
 
 async function main() {
-  if (!taskId) {
-    throw new Error('Task ID not provided');
-  }
-
-  await run(taskId);
+  const task = readTaskFromEnv();
+  await run(task);
 }
 
 void main().catch(async (error) => {
   console.error('Uncaught top-level promise rejection:', error);
 
-  if (taskId) {
-    try {
-      await markTaskFailed(taskId);
-    } catch (dbError) {
-      console.error('Failed to mark task as failed:', dbError);
-    }
+  try {
+    const task = readTaskFromEnv();
+    await sendParentEvent({
+      type: 'failed',
+      taskId: task.id,
+      error: error instanceof Error ? error.message : String(error),
+      ts: Date.now(),
+    });
+  } catch (sendError) {
+    console.error('Failed to send uncaught failure event:', sendError);
   }
 
   process.exit(1);

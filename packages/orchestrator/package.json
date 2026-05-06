@@ -13,6 +13,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
+    "test": "node --test test/worker-events.test.mjs",
     "clean": "rm -rf dist"
   },
   "devDependencies": {

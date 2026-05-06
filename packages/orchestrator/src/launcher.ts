@@ -1,13 +1,31 @@
 import { spawn } from "node:child_process";
-import { db } from "@beav/core";
+import { db, eq, type Task, type WorkerEvent } from "@beav/core";
 import { tasks } from "@beav/core";
-import { eq } from "drizzle-orm";
+import { handleWorkerMessage } from "./worker-events.js";
 
-export async function launchTaskProcess(taskId: string) {
-  const proc = spawn( "node", ["packages/worker/dist/index.js", taskId],{
-      stdio: "inherit",
-    }
+export async function launchTaskProcess(task: Task) {
+  const serializedTask = JSON.stringify(task);
+  const proc = spawn(
+    process.execPath,
+    ["packages/worker/dist/index.js"],
+    {
+      stdio: ["inherit", "inherit", "inherit", "ipc"],
+      env: {
+        ...process.env,
+        BEAV_WORKER_TASK: serializedTask,
+      },
+    },
   );
+
+  let workerMessages = Promise.resolve();
+
+  proc.on("message", (message) => {
+    workerMessages = workerMessages
+      .then(() => handleWorkerMessage(message as WorkerEvent))
+      .catch((error) => {
+        console.error(`[Worker ${task.id}] Failed to persist worker event:`, error);
+      });
+  });
 
   await db.update(tasks)
     .set({
@@ -15,7 +33,7 @@ export async function launchTaskProcess(taskId: string) {
       status: "running",
       startedAt: Date.now(),
     })
-    .where(eq(tasks.id, taskId));
+    .where(eq(tasks.id, task.id));
 
   return proc.pid;
 }
