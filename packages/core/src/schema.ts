@@ -1,4 +1,4 @@
-import { sqliteTable, integer, text, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, integer, text, uniqueIndex, index } from "drizzle-orm/sqlite-core"
 
 export const tasks = sqliteTable("tasks", {
     //ULID
@@ -41,6 +41,7 @@ export const tasks = sqliteTable("tasks", {
     completedAt: integer("completedAt"),
     createdAt: integer("createdAt")
 }, (table) => ({
+    statusIdx: index("tasks_status_idx").on(table.status),
     uniqueRepoIssue: uniqueIndex("uniqueRepoIssue").on(
       table.repoOwner, 
       table.repoName, 
