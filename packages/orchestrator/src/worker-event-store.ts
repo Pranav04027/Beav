@@ -1,8 +1,17 @@
 import { eq } from 'drizzle-orm';
 import { taskLogs, tasks } from '@beav/core/schema';
 import { type WorkerEvent, isWorkerEvent } from '@beav/core/worker-events';
+import type { db as coreDb } from '@beav/core/db';
 
-export async function persistWorkerEvent(event: WorkerEvent, database: any) {
+type WorkerEventDatabase = Pick<typeof coreDb, 'insert' | 'update' | 'transaction'>;
+type WorkerEventTransaction = Parameters<
+  Parameters<WorkerEventDatabase['transaction']>[0]
+>[0];
+
+export async function persistWorkerEvent(
+  event: WorkerEvent,
+  database: WorkerEventDatabase,
+) {
   switch (event.type) {
     case 'heartbeat':
       await database
@@ -28,7 +37,7 @@ export async function persistWorkerEvent(event: WorkerEvent, database: any) {
         .where(eq(tasks.id, event.taskId));
       return;
     case 'failed':
-      await database.transaction(async (tx: any) => {
+      await database.transaction(async (tx: WorkerEventTransaction) => {
         await tx.insert(taskLogs).values({
           taskId: event.taskId,
           stream: 'system',
@@ -66,7 +75,10 @@ export async function persistWorkerEvent(event: WorkerEvent, database: any) {
   }
 }
 
-export async function handleWorkerMessage(message: unknown, database: any) {
+export async function handleWorkerMessage(
+  message: unknown,
+  database: WorkerEventDatabase,
+) {
   if (!isWorkerEvent(message)) {
     throw new Error('Received invalid worker IPC message');
   }

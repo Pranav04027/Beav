@@ -23,9 +23,9 @@ export async function fetchIssue(
       state: 'open',
     });
 
-    var errors = [];
-    var added: number = 0;
-    var skipped: number = 0;
+    const errors = [];
+    let added = 0;
+    let skipped = 0;
 
     for (const issue of data) {
       const clean = TrackedIssueSchema.safeParse({
@@ -64,7 +64,16 @@ export async function fetchIssue(
       errors: errors,
     };
   } catch (error) {
-    throw error;
+    return {
+      added: 0,
+      skipped: 0,
+      errors: [
+        {
+          type: 'FETCH_ERROR',
+          message: error instanceof Error ? error.message : String(error),
+        },
+      ],
+    };
   }
 }
 
@@ -83,24 +92,32 @@ export async function checkVerifyingTasks(config: Workflow) {
     where: eq(tasks.status, "verifying"),
   });
 
-  for (const task of verifying) {
+  const concurrency = 5;
+
+  const verifyTask = async (task: Awaited<typeof verifying>[number]) => {
     try {
+      if (task.prNumber == null) {
+        console.error(`Verifier error for ${task.id}: missing prNumber`);
+        await mark(task.id, "failed");
+        return;
+      }
+
       const { data: pr } = await octokit.pulls.get({
         owner: task.repoOwner,
         repo: task.repoName,
-        pull_number: task.prNumber!,
+        pull_number: task.prNumber,
       });
 
       // merged = done
       if (pr.merged_at) {
         await mark(task.id, "done");
-        continue;
+        return;
       }
 
       // closed without merge = failed
       if (pr.state === "closed") {
         await mark(task.id, "failed");
-        continue;
+        return;
       }
 
       const { data } = await octokit.checks.listForRef({
@@ -114,13 +131,13 @@ export async function checkVerifyingTasks(config: Workflow) {
       // no CI = done
       if (runs.length === 0) {
         await mark(task.id, "done");
-        continue;
+        return;
       }
 
       // any fail = failed
       if (runs.some(r => r.conclusion === "failure")) {
         await mark(task.id, "failed");
-        continue;
+        return;
       }
 
       // all success = done
@@ -139,6 +156,11 @@ export async function checkVerifyingTasks(config: Workflow) {
     } catch (err) {
       console.error(`Verifier error for ${task.id}`, err);
     }
+  }
+
+  for (let index = 0; index < verifying.length; index += concurrency) {
+    const batch = verifying.slice(index, index + concurrency);
+    await Promise.allSettled(batch.map(verifyTask));
   }
 }
 

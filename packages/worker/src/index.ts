@@ -1,4 +1,3 @@
-console.log('worker');
 import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import fs from 'node:fs/promises';
 import readline from 'node:readline';
@@ -11,7 +10,10 @@ type WorkerProc = ChildProcessByStdio<Writable, Readable, null>;
 let rpcId = 0;
 const nextId = (): number => ++rpcId;
 
-const pending = new Map<number, (res: any) => void>();
+const pending = new Map<number, {
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+}>();
 
 function readTaskFromEnv(): Task {
   const rawTask = process.env.BEAV_WORKER_TASK;
@@ -35,7 +37,9 @@ function readTaskFromEnv(): Task {
 
 function sendParentEvent(event: WorkerEvent): Promise<void> {
   if (typeof process.send !== 'function') {
-    throw new Error('Worker must be started with an IPC channel');
+    return Promise.reject(
+      new Error('Worker must be started with an IPC channel'),
+    );
   }
 
   return new Promise((resolve, reject) => {
@@ -66,6 +70,14 @@ async function run(task: Task) {
   const proc: WorkerProc = spawn('codex', ['app-server'], {
     stdio: ['pipe', 'pipe', 'inherit'],
   });
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+
+  const rejectPending = (error: Error) => {
+    for (const { reject } of pending.values()) {
+      reject(error);
+    }
+    pending.clear();
+  };
 
   const heartbeatInterval = setInterval(() => {
     void sendParentEvent({
@@ -80,10 +92,18 @@ async function run(task: Task) {
   let completed = false;
   let cleanedUp = false;
 
+  const removeSignalHandlers = () => {
+    for (const [signal, handler] of signalHandlers) {
+      process.removeListener(signal, handler);
+    }
+    signalHandlers.clear();
+  };
+
   const finalizeFailure = async (error: unknown) => {
     if (completed) return;
     completed = true;
     clearInterval(heartbeatInterval);
+    removeSignalHandlers();
 
     console.error('Worker failed:', error);
 
@@ -112,6 +132,7 @@ async function run(task: Task) {
     if (completed) return;
     completed = true;
     clearInterval(heartbeatInterval);
+    removeSignalHandlers();
 
     await sendParentEvent({
       type: 'completed',
@@ -125,7 +146,12 @@ async function run(task: Task) {
     }
   };
 
-  proc.on('exit', () => {
+  proc.on('exit', (code, signal) => {
+    rejectPending(
+      new Error(
+        `codex app-server exited before replying${code != null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}`,
+      ),
+    );
     if (!completed) {
       void finalizeFailure(
         new Error('codex app-server exited unexpectedly'),
@@ -135,15 +161,31 @@ async function run(task: Task) {
     }
   });
 
+  proc.on('error', (error) => {
+    rejectPending(error instanceof Error ? error : new Error(String(error)));
+    if (!completed) {
+      void finalizeFailure(error).finally(() => {
+        process.exit(1);
+      });
+    }
+  });
+
   const rl = readline.createInterface({ input: proc.stdout });
 
   const send = (method: string, params?: any): Promise<any> => {
     const id = nextId();
+    const payload = JSON.stringify({ method, id, params }) + '\n';
 
-    proc.stdin.write(JSON.stringify({ method, id, params }) + '\n');
+    return new Promise((resolve, reject) => {
+      pending.set(id, { resolve, reject });
+      proc.stdin.write(payload, (error) => {
+        if (!error) {
+          return;
+        }
 
-    return new Promise((resolve) => {
-      pending.set(id, resolve);
+        pending.delete(id);
+        reject(error);
+      });
     });
   };
 
@@ -156,9 +198,21 @@ async function run(task: Task) {
     }
 
     if (msg.id !== undefined) {
-      const resolve = pending.get(msg.id);
-      if (resolve) {
-        resolve(msg.result);
+      const resolver = pending.get(msg.id);
+      if (resolver) {
+        pending.delete(msg.id);
+        if (msg.error) {
+          resolver.reject(
+            new Error(
+              typeof msg.error?.message === 'string'
+                ? msg.error.message
+                : 'Worker request failed',
+            ),
+          );
+          return;
+        }
+
+        resolver.resolve(msg.result);
         pending.delete(msg.id);
       }
       return;
@@ -204,6 +258,16 @@ async function run(task: Task) {
       });
     });
   });
+
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    const handler = () => {
+      void finalizeFailure(new Error(`Worker received ${signal}`)).finally(() => {
+        process.exit(1);
+      });
+    };
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
 
   try {
     await send('initialize', {

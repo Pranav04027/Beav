@@ -19,8 +19,9 @@ async function main() {
         throw new Error('Usage: beav worker <taskId>');
       }
 
-      const { launchTaskProcess } = await import('@beav/orchestrator');
-      const pid = await launchTaskProcess(arg);
+      const { launchTaskProcess, loadTaskForLaunch } = await import('@beav/orchestrator');
+      const task = await loadTaskForLaunch(arg);
+      const pid = await launchTaskProcess(task);
       console.log(`Launched worker ${pid} for task ${arg}`);
       break;
     }

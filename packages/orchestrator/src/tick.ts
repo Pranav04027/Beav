@@ -233,6 +233,8 @@ async function fetchCandidateIssue(config: Workflow) {
     const detail =
       err.type === 'VALIDATION_ERROR'
         ? `Validation failed for #${err.issueNumber}`
+        : err.type === 'FETCH_ERROR'
+          ? `GitHub fetch failed: ${err.message || 'Unknown fetch error'}`
         : `Database error: ${err.message || 'Unknown SQL error'}`;
     console.error(`  -> Error [${index + 1}]: ${detail}`);
   });
@@ -312,7 +314,7 @@ async function dispatchTasks(config: Workflow) {
 
       const retryCount = (task.retryCount ?? 0) + 1;
       const maxRetries = task.maxRetries ?? 0;
-      const nextStatus = new TaskStateMachine(task.status).transitionTo(
+      const nextStatus = new TaskStateMachine('claimed').transitionTo(
         'crashed',
       );
 
@@ -342,19 +344,14 @@ async function VerifyTasks(config: Workflow) {
 
 export async function tick(config: Workflow) {
   console.log(`\nTick Start: ${new Date().toLocaleTimeString()}`);
+  const now = Date.now();
+  const threshold = now - config.thresholdMs;
+  await checkDeadTasksandUpdate(threshold);
+  await requeueRetryableTasks(now);
 
-  try {
-    const now = Date.now();
-    const threshold = now - config.thresholdMs;
-    await checkDeadTasksandUpdate(threshold);
-    await requeueRetryableTasks(now);
+  await fetchCandidateIssue(config);
 
-    await fetchCandidateIssue(config);
+  await dispatchTasks(config);
 
-    await dispatchTasks(config);
-
-    await VerifyTasks(config);
-  } catch (error) {
-    console.error('CRITICAL TICK ERROR', error);
-  }
+  await VerifyTasks(config);
 }

@@ -1,7 +1,5 @@
-import { db, eq, tasks } from '@beav/core';
-import { type Workflow } from '@beav/core';
+import { db, tasks } from '@beav/core';
 
-export default function status() {
-    var tasks = [];
-    await db.select()
+export default async function status() {
+    return db.select().from(tasks).orderBy(tasks.createdAt);
 }
