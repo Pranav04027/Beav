@@ -1,8 +1,14 @@
 const command = process.argv[2];
-const arg = process.argv[3];
+const arg = process.argv[3];  
 
 async function main() {
   switch (command) {
+    case 'setup': {
+      const { setup } = await import('./setup.js');
+      await setup();
+      break;
+    }
+
     case 'start': {
       const { start } = await import('@beav/orchestrator');
       await start();
@@ -26,7 +32,7 @@ async function main() {
       break;
     }
     default:
-      console.log('Usage: beav <start|status|logs|worker>');
+      console.log('Usage: beav <setup|start|status|logs|worker>');
   }
 }
 
