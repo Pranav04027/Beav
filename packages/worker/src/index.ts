@@ -159,27 +159,6 @@ async function run(task: Task) {
     }
   };
 
-  const finalizeSuccess = async () => {
-    if (completed) return;
-    completed = true;
-    clearInterval(heartbeatInterval);
-    clearTimeout(workerTimeout);
-    removeSignalHandlers();
-
-    logger.info(tag, 'Completed successfully');
-
-    await sendParentEvent({
-      type: 'completed',
-      taskId: task.id,
-      completedAt: Date.now(),
-    });
-
-    if (!cleanedUp) {
-      cleanedUp = true;
-      await cleanupTask(proc, task, tag);
-    }
-  };
-
   proc.on('exit', (code, signal) => {
     rejectPending(
       new Error(
@@ -308,13 +287,24 @@ async function run(task: Task) {
       }
 
       logger.info(tag, 'Creating PR...');
-      const created = await createPR(task);
-      if (!created) {
+      const prResult = await createPR(task);
+      if (!prResult) {
         await finalizeFailure(new Error('createPR returned false'));
         return;
       }
 
-      await finalizeSuccess();
+      await sendParentEvent({
+        type: 'completed',
+        taskId: task.id,
+        completedAt: Date.now(),
+        prNumber: prResult.prNumber,
+        prUrl: prResult.prUrl,
+      });
+
+      if (!cleanedUp) {
+        cleanedUp = true;
+        await cleanupTask(proc, task, tag);
+      }
       process.exit(0);
     }
   };

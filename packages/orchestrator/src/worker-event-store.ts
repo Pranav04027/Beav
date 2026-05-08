@@ -58,6 +58,8 @@ export async function persistWorkerEvent(
         .set({
           status: 'verifying',
           completedAt: event.completedAt,
+          prNumber: event.prNumber,
+          prURL: event.prUrl,
           workspacePath: null,
           threadId: null,
           turnId: null,

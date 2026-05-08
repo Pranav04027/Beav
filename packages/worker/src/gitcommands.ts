@@ -25,20 +25,25 @@ function run(command: string, args: string[], cwd: string): Promise<string> {
   });
 }
 
-async function prExists(branch: string, cwd: string) {
+async function prExists(branch: string, cwd: string): Promise<{ exists: boolean; number: number | null; url: string | null }> {
   try {
     const res = await run(
       'gh',
-      ['pr', 'list', '--head', branch, '--json', 'number', '--jq', '.[0].number'],
+      ['pr', 'list', '--head', branch, '--json', 'number,url', '--jq', '.[0]'],
       cwd,
     );
-    return res.trim() !== '';
+    const trimmed = res.trim();
+    if (!trimmed) {
+      return { exists: false, number: null, url: null };
+    }
+    const pr = JSON.parse(trimmed);
+    return { exists: true, number: pr.number, url: pr.url };
   } catch {
-    return false;
+    return { exists: false, number: null, url: null };
   }
 }
 
-export async function createPR(task: Task): Promise<boolean> {
+export async function createPR(task: Task): Promise<{ prNumber: number; prUrl: string } | false> {
   const cwd = task.workspacePath;
   if (!cwd) {
     throw new Error(`Task ${task.id} is missing workspacePath`);
@@ -65,12 +70,12 @@ export async function createPR(task: Task): Promise<boolean> {
   console.error('[pr] Pushing branch to origin...');
   await run('git', ['push', '-u', 'origin', branch], cwd);
 
-  const exists = await prExists(branch, cwd);
+  const existing = await prExists(branch, cwd);
 
-  if (!exists) {
+  if (!existing.exists) {
     console.error(`[pr] Creating PR for ${branch} → #${task.githubIssueNumber}`);
     try {
-      await run(
+      const prUrl = await run(
         'gh',
         [
           'pr',
@@ -86,14 +91,16 @@ export async function createPR(task: Task): Promise<boolean> {
         ],
         cwd,
       );
-      console.error('[pr] PR created successfully');
-      return true;
+      const cleanUrl = prUrl.trim();
+      console.error('[pr] PR created successfully:', cleanUrl);
+      const prNumber = parseInt(cleanUrl.split('/').pop()!, 10);
+      return { prNumber, prUrl: cleanUrl };
     } catch (error) {
       console.error('[pr] PR creation failed:', error);
       return false;
     }
   } else {
     console.error('[pr] PR already exists → skipping');
-    return true;
+    return { prNumber: existing.number!, prUrl: existing.url! };
   }
 }

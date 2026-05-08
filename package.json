@@ -11,7 +11,8 @@
     "dev:worker": "pnpm -F @beav/worker dev",
     "format": "prettier --write .",
     "build": "pnpm -r build",
-    "clean": "pnpm -r clean"
+    "clean": "pnpm -r clean",
+    "start": "pnpm -C packages/cli exec tsx src/index.ts start"
   },
   "devDependencies": {
     "prettier": "^3.8.1"

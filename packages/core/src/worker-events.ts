@@ -27,6 +27,8 @@ export type WorkerEvent =
       type: 'completed';
       taskId: string;
       completedAt: number;
+      prNumber: number;
+      prUrl: string;
     };
 
 export function isWorkerEvent(value: unknown): value is WorkerEvent {
@@ -64,7 +66,9 @@ export function isWorkerEvent(value: unknown): value is WorkerEvent {
     case 'completed':
       return (
         typeof event.taskId === 'string' &&
-        typeof event.completedAt === 'number'
+        typeof event.completedAt === 'number' &&
+        typeof event.prNumber === 'number' &&
+        typeof event.prUrl === 'string'
       );
     default:
       return false;

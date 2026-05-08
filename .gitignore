@@ -1,5 +1,6 @@
 node_modules/
-Beav_Test_Repo
+Beav_Test_Repo/
+packages/cli/workspaces/01KR0K7SV39APS46NKV75HRZMK
 dist/
 build/
 .pnpm-store*
