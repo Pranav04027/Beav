@@ -2,10 +2,17 @@ import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import fs from 'node:fs/promises';
 import readline from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
-import { type Task, type WorkerEvent } from '@beav/core';
+import { type Task, type WorkerEvent, logger } from '@beav/core';
 import { createPR } from './gitcommands.js';
 
-type WorkerProc = ChildProcessByStdio<Writable, Readable, null>;
+type WorkerProc = ChildProcessByStdio<Writable, Readable, Readable>;
+
+// Lines from codex stderr to silently discard
+const NOISE_PATTERNS = [
+  /bubblewrap/i,
+  /bwrap/i,
+  /^\s*$/,
+];
 
 let rpcId = 0;
 const nextId = (): number => ++rpcId;
@@ -54,21 +61,34 @@ function sendParentEvent(event: WorkerEvent): Promise<void> {
   });
 }
 
-async function cleanupTask(proc: WorkerProc, task: Task) {
+async function cleanupTask(proc: WorkerProc, task: Task, tag: string) {
   if (task.workspacePath) {
+    logger.info(tag, `Cleaning up workspace`);
     await fs.rm(task.workspacePath, { recursive: true, force: true });
   }
 
   try {
     proc.kill('SIGKILL');
+    logger.info(tag, 'Killed codex process');
   } catch (error) {
-    console.error('Failed to kill worker child process:', error);
+    logger.error(tag, 'Failed to kill worker child process', error);
   }
 }
 
 async function run(task: Task) {
+  const tag = `worker:${task.id.slice(-8)}`;
+
+  logger.info(tag, `Issue #${task.githubIssueNumber}: ${task.issueTitle}`);
+  logger.info(tag, `Workspace: ${task.workspacePath}`);
+
   const proc: WorkerProc = spawn('codex', ['app-server'], {
-    stdio: ['pipe', 'pipe', 'inherit'],
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  // Filter codex stderr — suppress known noise, pass real errors through
+  readline.createInterface({ input: proc.stderr }).on('line', (line) => {
+    if (NOISE_PATTERNS.some((p) => p.test(line))) return;
+    logger.error(tag, `[codex] ${line}`);
   });
   const signalHandlers = new Map<NodeJS.Signals, () => void>();
 
@@ -85,12 +105,21 @@ async function run(task: Task) {
       taskId: task.id,
       ts: Date.now(),
     }).catch((error) => {
-      console.error('Heartbeat send failed:', error);
+      logger.error(tag, 'Heartbeat failed', error);
     });
   }, 15 * 1000);
 
   let completed = false;
   let cleanedUp = false;
+
+  // Hard timeout: if the agent hasn't completed within 10 minutes, kill it.
+  const WORKER_TIMEOUT_MS = 10 * 60 * 1000;
+  const workerTimeout = setTimeout(() => {
+    logger.error(tag, 'Worker timeout exceeded (10 min) — forcing failure');
+    void finalizeFailure(new Error('Worker timeout exceeded')).finally(() => {
+      process.exit(1);
+    });
+  }, WORKER_TIMEOUT_MS);
 
   const removeSignalHandlers = () => {
     for (const [signal, handler] of signalHandlers) {
@@ -103,26 +132,28 @@ async function run(task: Task) {
     if (completed) return;
     completed = true;
     clearInterval(heartbeatInterval);
+    clearTimeout(workerTimeout);
     removeSignalHandlers();
 
-    console.error('Worker failed:', error);
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(tag, `FAILED: ${message}`);
 
     try {
       await sendParentEvent({
         type: 'failed',
         taskId: task.id,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
         ts: Date.now(),
       });
     } catch (sendError) {
-      console.error('Failed to send worker failure event:', sendError);
+      logger.error(tag, 'Failed to send worker failure event', sendError);
     } finally {
       if (!cleanedUp) {
         cleanedUp = true;
         try {
-          await cleanupTask(proc, task);
+          await cleanupTask(proc, task, tag);
         } catch (cleanupError) {
-          console.error('Cleanup after failure failed:', cleanupError);
+          logger.error(tag, 'Cleanup after failure failed', cleanupError);
         }
       }
     }
@@ -132,7 +163,10 @@ async function run(task: Task) {
     if (completed) return;
     completed = true;
     clearInterval(heartbeatInterval);
+    clearTimeout(workerTimeout);
     removeSignalHandlers();
+
+    logger.info(tag, 'Completed successfully');
 
     await sendParentEvent({
       type: 'completed',
@@ -142,7 +176,7 @@ async function run(task: Task) {
 
     if (!cleanedUp) {
       cleanedUp = true;
-      await cleanupTask(proc, task);
+      await cleanupTask(proc, task, tag);
     }
   };
 
@@ -176,6 +210,8 @@ async function run(task: Task) {
     const id = nextId();
     const payload = JSON.stringify({ method, id, params }) + '\n';
 
+    logger.info(tag, `→ ${method}`);
+
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject });
       proc.stdin.write(payload, (error) => {
@@ -189,6 +225,27 @@ async function run(task: Task) {
     });
   };
 
+  const handleServerRequest = (msg: any) => {
+    // Server-initiated requests have both id and method.
+    // We MUST respond or codex blocks forever waiting for our reply.
+    if (
+      msg.method === 'item/commandExecution/requestApproval' ||
+      msg.method === 'item/fileChange/requestApproval'
+    ) {
+      logger.info(tag, `Auto-approving: ${msg.method} (id: ${msg.id})`);
+      proc.stdin.write(
+        JSON.stringify({ id: msg.id, result: { approved: true } }) + '\n',
+      );
+      return;
+    }
+
+    // Unknown server request — respond with empty result so codex doesn't block
+    logger.info(tag, `Unknown server request: ${msg.method} (id: ${msg.id}) — auto-responding`);
+    proc.stdin.write(
+      JSON.stringify({ id: msg.id, result: {} }) + '\n',
+    );
+  };
+
   const handleLine = async (line: string) => {
     let msg;
     try {
@@ -197,11 +254,20 @@ async function run(task: Task) {
       return;
     }
 
+    // Server-initiated request: has BOTH id AND method.
+    // Must respond or codex hangs waiting for approval.
+    if (msg.id !== undefined && msg.method) {
+      handleServerRequest(msg);
+      return;
+    }
+
+    // Response to one of OUR requests: has id but no method.
     if (msg.id !== undefined) {
       const resolver = pending.get(msg.id);
       if (resolver) {
         pending.delete(msg.id);
         if (msg.error) {
+          logger.error(tag, `← RPC error for id ${msg.id}: ${msg.error.message ?? 'unknown'}`);
           resolver.reject(
             new Error(
               typeof msg.error?.message === 'string'
@@ -213,12 +279,12 @@ async function run(task: Task) {
         }
 
         resolver.resolve(msg.result);
-        pending.delete(msg.id);
       }
       return;
     }
 
-    if (msg.method === 'agentMessage/delta') {
+    // Server notifications (no id): streaming events
+    if (msg.method === 'item/agentMessage/delta') {
       const text = msg.params?.delta || '';
 
       if (text.trim()) {
@@ -234,12 +300,14 @@ async function run(task: Task) {
 
     if (msg.method === 'turn/completed') {
       const status = msg.params?.turn?.status;
+      logger.info(tag, `Turn completed (status: ${status ?? 'unknown'})`);
 
       if (status === 'failed') {
         await finalizeFailure(new Error('Agent turn completed with failed status'));
         return;
       }
 
+      logger.info(tag, 'Creating PR...');
       const created = await createPR(task);
       if (!created) {
         await finalizeFailure(new Error('createPR returned false'));
@@ -252,6 +320,9 @@ async function run(task: Task) {
   };
 
   rl.on('line', (line) => {
+    if (process.env.DEBUG_CODEX_RAW === '1') {
+      process.stderr.write(`[CODEX RAW] ${line}\n`);
+    }
     void handleLine(line).catch((error) => {
       void finalizeFailure(error).finally(() => {
         process.exit(1);
@@ -277,13 +348,17 @@ async function run(task: Task) {
       },
     });
 
+    logger.info(tag, 'Sending initialized notification');
     proc.stdin.write(
       JSON.stringify({ method: 'initialized', params: {} }) + '\n',
     );
 
+    logger.info(tag, 'Starting thread with model gpt-5.4 (full-auto)');
     const threadRes: any = await send('thread/start', {
       model: 'gpt-5.4',
       cwd: task.workspacePath,
+      approval_policy: 'never',
+      sandbox: 'danger-full-access',
     });
 
     const threadId = threadRes?.thread?.id;
@@ -291,13 +366,15 @@ async function run(task: Task) {
       throw new Error('thread/start did not return thread.id');
     }
 
+    logger.info(tag, `Thread started: ${threadId}`);
+
     const turnRes: any = await send('turn/start', {
       threadId,
       input: [
         {
           type: 'text',
           text: `
-        You are an autonomous software engineer.
+        You are an autonomous software engineer. Act immediately — do NOT ask for confirmation or approval before running commands.
 
         Goal:
         Fix the GitHub issue described below.
@@ -308,13 +385,15 @@ async function run(task: Task) {
         - Ensure all tests pass
         - If tests fail, fix them
         - Do NOT create pull requests or push changes
+        - You may perform AT MOST 5 tool-use iterations. If you cannot fix the issue in 5 iterations, STOP and explain why.
+        - Never wait for user approval. Execute all commands automatically.
 
         Process:
         1. Understand the issue
         2. Locate relevant code
         3. Implement fix
-        4. Run tests
-        5. Iterate until tests pass
+        4. Run tests (ensure the test command exits — do NOT run watch mode)
+        5. If tests fail and you have iterations remaining, fix and re-run. Otherwise stop.
 
         Output:
         - Modify files directly in the workspace
@@ -335,6 +414,8 @@ async function run(task: Task) {
       throw new Error('turn/start did not return turn.id');
     }
 
+    logger.info(tag, `Turn started: ${turnId}. Waiting for completion...`);
+
     await sendParentEvent({
       type: 'thread-state',
       taskId: task.id,
@@ -353,7 +434,7 @@ async function main() {
 }
 
 void main().catch(async (error) => {
-  console.error('Uncaught top-level promise rejection:', error);
+  logger.error('worker', 'Uncaught top-level promise rejection', error);
 
   try {
     const task = readTaskFromEnv();
@@ -364,7 +445,7 @@ void main().catch(async (error) => {
       ts: Date.now(),
     });
   } catch (sendError) {
-    console.error('Failed to send uncaught failure event:', sendError);
+    logger.error('worker', 'Failed to send uncaught failure event', sendError);
   }
 
   process.exit(1);

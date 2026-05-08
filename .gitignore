@@ -1,4 +1,5 @@
 node_modules/
+Beav_Test_Repo
 dist/
 build/
 .pnpm-store*

@@ -1,6 +1,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
+import * as logger from "./logger.js";
 
 export async function setupWorkspace(
   taskId: string,
@@ -16,11 +17,13 @@ export async function setupWorkspace(
     throw new Error(`SECURITY BREACH: Path traversal detected for ID ${taskId}`);
   }
 
+  const tag = `workspace:${taskId.slice(-8)}`;
+  logger.info(tag, `Creating directory: ${targetDir}`);
   await fs.rm(targetDir, { recursive: true, force: true });
   await fs.mkdir(targetDir, { recursive: true });
 
   const repoCloneUrl = `https://github.com/${repoOwner}/${repoName}.git`;
-  console.log(`[Workspace] Cloning ${repoCloneUrl} into ${targetDir}...`);
+  logger.info(tag, `Cloning ${repoOwner}/${repoName}...`);
   try {
     await new Promise<void>((resolve, reject) => {
       const proc = spawn('git', ['clone', '--depth', '1', repoCloneUrl, '.'], {
@@ -42,6 +45,7 @@ export async function setupWorkspace(
         reject(new Error(stderr || `git clone failed with exit code ${code}`));
       });
     });
+    logger.info(tag, `Clone complete`);
   } catch (err) {
     throw new Error(`Git clone failed: ${err instanceof Error ? err.message : String(err)}`);
   }

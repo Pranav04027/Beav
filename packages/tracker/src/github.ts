@@ -1,5 +1,5 @@
 import { Octokit } from '@octokit/rest';
-import { TrackedIssueSchema, type TrackedIssue } from '@beav/core';
+import { TrackedIssueSchema, type TrackedIssue, logger } from '@beav/core';
 import { db, eq } from '@beav/core';
 import { tasks } from '@beav/core';
 import { ulid } from 'ulid';
@@ -11,6 +11,8 @@ export async function fetchIssue(
   label: string,
   ghToken: string,
 ) {
+  logger.info('tracker', `Fetching open issues from ${owner}/${repo} with label "${label}"`);
+
   try {
     const octokit = new Octokit({
       auth: ghToken,
@@ -23,7 +25,9 @@ export async function fetchIssue(
       state: 'open',
     });
 
-    const errors = [];
+    logger.info('tracker', `Found ${data.length} open issue(s) with label "${label}"`);
+
+    const errors: unknown[] = [];
     let added = 0;
     let skipped = 0;
 
@@ -39,7 +43,7 @@ export async function fetchIssue(
       });
 
       if (!clean.success) {
-        console.error(`tracker/github.ts failed to parse Issue ID:${issue.id}`);
+        logger.warn('tracker', `Validation failed for issue #${issue.number} (ID: ${issue.id})`);
         errors.push({
           type: 'VALIDATION_ERROR',
           issueNumber: issue.number,
@@ -51,19 +55,25 @@ export async function fetchIssue(
 
       const error = await savetoDB(clean.data);
       if (error) {
+        logger.warn('tracker', `Database conflict for issue #${issue.number}: ${error instanceof Error ? error.message : String(error)}`);
         errors.push(error);
         skipped++;
         continue;
       }
+
       added++;
+      logger.info('tracker', `Tracked issue #${issue.number}: ${issue.title}`);
     }
+
+    logger.info('tracker', `Sync complete: ${added} added, ${skipped} skipped`);
 
     return {
       added,
       skipped,
-      errors: errors,
+      errors,
     };
   } catch (error) {
+    logger.error('tracker', `GitHub API fetch failed: ${error instanceof Error ? error.message : String(error)}`);
     return {
       added: 0,
       skipped: 0,
@@ -81,15 +91,21 @@ async function mark(id: string, status: "done" | "failed") {
   await db.update(tasks)
     .set({ status })
     .where(eq(tasks.id, id));
+
+  logger.info(`verify:${id}`, `Marked as ${status}`);
 }
 
 export async function checkVerifyingTasks(config: Workflow) {
-  const octokit = new Octokit({
-    auth: config.ghToken
-  });
-
   const verifying = await db.query.tasks.findMany({
     where: eq(tasks.status, "verifying"),
+  });
+
+  if (verifying.length === 0) return;
+
+  logger.info('verifier', `Checking ${verifying.length} verifying task(s)`);
+
+  const octokit = new Octokit({
+    auth: config.ghToken
   });
 
   const concurrency = 5;
@@ -97,7 +113,7 @@ export async function checkVerifyingTasks(config: Workflow) {
   const verifyTask = async (task: Awaited<typeof verifying>[number]) => {
     try {
       if (task.prNumber == null) {
-        console.error(`Verifier error for ${task.id}: missing prNumber`);
+        logger.error(`verify:${task.id}`, "Missing prNumber → failed");
         await mark(task.id, "failed");
         return;
       }
@@ -107,6 +123,8 @@ export async function checkVerifyingTasks(config: Workflow) {
         repo: task.repoName,
         pull_number: task.prNumber,
       });
+
+      logger.info(`verify:${task.id}`, `PR #${pr.number}: state=${pr.state}, merged=${pr.merged_at != null}`);
 
       // merged = done
       if (pr.merged_at) {
@@ -130,12 +148,16 @@ export async function checkVerifyingTasks(config: Workflow) {
 
       // no CI = done
       if (runs.length === 0) {
+        logger.info(`verify:${task.id}`, "No CI checks found → marking done");
         await mark(task.id, "done");
         return;
       }
 
+      logger.info(`verify:${task.id}`, `${runs.length} check run(s) found`);
+
       // any fail = failed
       if (runs.some(r => r.conclusion === "failure")) {
+        logger.info(`verify:${task.id}`, "At least one check failed → marking failed");
         await mark(task.id, "failed");
         return;
       }
@@ -148,18 +170,21 @@ export async function checkVerifyingTasks(config: Workflow) {
             r.conclusion === "success"
         )
       ) {
+        logger.info(`verify:${task.id}`, "All checks passed → marking done");
         await mark(task.id, "done");
+        return;
       }
 
-      // else remain verifying
+      logger.info(`verify:${task.id}`, "Checks still in progress → staying verifying");
 
     } catch (err) {
-      console.error(`Verifier error for ${task.id}`, err);
+      logger.error(`verify:${task.id}`, `Verification error`, err);
     }
-  }
+  };
 
   for (let index = 0; index < verifying.length; index += concurrency) {
     const batch = verifying.slice(index, index + concurrency);
+    logger.info('verifier', `Processing batch ${Math.floor(index / concurrency) + 1} (${batch.length} tasks)`);
     await Promise.allSettled(batch.map(verifyTask));
   }
 }

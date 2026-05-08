@@ -1,7 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, type ChildProcess } from "node:child_process";
-import { db, eq, type Task, type WorkerEvent } from "@beav/core";
+import { db, eq, type Task, type WorkerEvent, logger } from "@beav/core";
 import { tasks } from "@beav/core";
 import { handleWorkerMessage } from "./worker-events.js";
 
@@ -48,17 +48,18 @@ export async function launchTaskProcess(task: Task) {
     workerMessages = workerMessages
       .then(() => handleWorkerMessage(message as WorkerEvent))
       .catch((error) => {
-        console.error(`[Worker ${task.id}] Failed to persist worker event:`, error);
+        logger.error(`worker:${task.id}`, "Failed to persist worker event", error);
       });
   });
 
-  proc.once("exit", () => {
+  proc.once("exit", (code, signal) => {
     activeWorkers.delete(task.id);
+    logger.info(`worker:${task.id}`, `Process exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
   });
 
   proc.once("error", (error) => {
     activeWorkers.delete(task.id);
-    console.error(`[Worker ${task.id}] Process error:`, error);
+    logger.error(`worker:${task.id}`, "Process spawn error", error);
   });
 
   await db.update(tasks)
@@ -69,10 +70,19 @@ export async function launchTaskProcess(task: Task) {
     })
     .where(eq(tasks.id, task.id));
 
+  logger.info(`worker:${task.id}`, `Spawned worker PID ${proc.pid}`);
+
   return proc.pid;
 }
 
 export async function stopActiveWorkers(signal: NodeJS.Signals = "SIGTERM") {
+  if (activeWorkers.size === 0) {
+    logger.info("orchestrator", "No active workers to stop");
+    return;
+  }
+
+  logger.info("orchestrator", `Stopping ${activeWorkers.size} active worker(s)...`);
+
   const exits = Array.from(activeWorkers.entries()).map(([taskId, proc]) => {
     return new Promise<void>((resolve) => {
       if (proc.exitCode != null || proc.killed) {
@@ -82,10 +92,11 @@ export async function stopActiveWorkers(signal: NodeJS.Signals = "SIGTERM") {
       }
 
       const timeout = setTimeout(() => {
+        logger.warn(`worker:${taskId}`, "Worker did not exit within 5s, force killing");
         try {
           proc.kill("SIGKILL");
         } catch (error) {
-          console.error(`[Worker ${taskId}] Failed to force kill worker:`, error);
+          logger.error(`worker:${taskId}`, "Failed to force kill worker", error);
         }
       }, 5000);
 
@@ -96,13 +107,15 @@ export async function stopActiveWorkers(signal: NodeJS.Signals = "SIGTERM") {
 
       try {
         proc.kill(signal);
+        logger.info(`worker:${taskId}`, `Sent ${signal} to worker`);
       } catch (error) {
         clearTimeout(timeout);
-        console.error(`[Worker ${taskId}] Failed to stop worker:`, error);
+        logger.error(`worker:${taskId}`, "Failed to send signal to worker", error);
         resolve();
       }
     });
   });
 
   await Promise.all(exits);
+  logger.info("orchestrator", "All workers stopped");
 }

@@ -6,7 +6,7 @@ import {
 import type { db as coreDb } from '@beav/core/db';
 import type { WorkerEvent } from '@beav/core/worker-events';
 
-type WorkerEventDatabase = typeof coreDb;
+type WorkerEventDatabase = Pick<typeof coreDb, 'insert' | 'update'>;
 
 export async function persistWorkerEvent(
   event: WorkerEvent,

@@ -8,6 +8,7 @@ import {
   lt,
   inArray,
   setupWorkspace,
+  logger,
   type Task,
 } from '@beav/core';
 import fs from 'node:fs/promises';
@@ -18,194 +19,195 @@ import { launchTaskProcess } from './launcher.js';
 import { checkVerifyingTasks } from '@beav/tracker';
 
 export async function recoverOnStartup() {
+  const recovered = await db
+    .select()
+    .from(tasks)
+    .where(inArray(tasks.status, ['claimed', 'running']));
+
+  if (recovered.length === 0) {
+    logger.info('boot', 'No stale tasks to recover');
+    return;
+  }
+
   const workspacesToRemove: string[] = [];
 
-  await db.transaction(async (tx) => {
-    const recovered = await tx
-      .select()
-      .from(tasks)
-      .where(inArray(tasks.status, ['claimed', 'running']));
-    for (const task of recovered) {
-      const sm = new TaskStateMachine(task.status);
-      const next = sm.transitionTo('crashed');
-      const retryCount = (task.retryCount ?? 0) + 1;
-      const maxRetries = task.maxRetries ?? 0;
-      const nextRetryAt =
-        retryCount >= maxRetries
-          ? null
-          : Date.now() + computeRetryDelayMs(retryCount);
+  for (const task of recovered) {
+    logger.info('boot', `Recovering stale task ${task.id} (${task.status})`);
+    const sm = new TaskStateMachine(task.status);
+    const next = sm.transitionTo('crashed');
+    const retryCount = (task.retryCount ?? 0) + 1;
+    const maxRetries = task.maxRetries ?? 0;
+    const nextRetryAt =
+      retryCount >= maxRetries
+        ? null
+        : Date.now() + computeRetryDelayMs(retryCount);
 
-      await tx
-        .update(tasks)
-        .set({
-          status: next,
-          retryCount,
-          nextRetryAt,
-          workerPid: null,
-          workspacePath: null,
-          threadId: null,
-          turnId: null,
-          startedAt: null,
-          claimedAt: null,
-          lastHeartbeat: null,
-        })
-        .where(eq(tasks.id, task.id));
+    await db
+      .update(tasks)
+      .set({
+        status: next,
+        retryCount,
+        nextRetryAt,
+        workerPid: null,
+        workspacePath: null,
+        threadId: null,
+        turnId: null,
+        startedAt: null,
+        claimedAt: null,
+        lastHeartbeat: null,
+      })
+      .where(eq(tasks.id, task.id));
 
-      if (task.workspacePath) {
-        workspacesToRemove.push(task.workspacePath);
-      }
+    if (task.workspacePath) {
+      workspacesToRemove.push(task.workspacePath);
     }
+  }
 
-    if (recovered.length > 0) {
-      console.log(`[Boot] Successfully recovered ${recovered.length} tasks.`);
-    }
-  });
+  logger.info('boot', `Recovered ${recovered.length} stale tasks → crashed`);
 
   for (const workspacePath of workspacesToRemove) {
     await fs.rm(workspacePath, { recursive: true, force: true });
   }
 }
 
-async function killTask(pid: number) {
+async function killTask(taskId: string, pid: number) {
   try {
     process.kill(pid, 'SIGKILL');
-    console.log(`Successfully killed stale process ${pid}`);
+    logger.info('deadlock', `Killed stale process ${pid} for task ${taskId}`);
   } catch (error: any) {
     if (error.code === 'ESRCH') {
-      console.log(`Process ${pid} not found (already dead).`);
+      logger.info('deadlock', `Process ${pid} for task ${taskId} already dead`);
     } else {
-      console.error(`Unexpected error killing process ${pid}:`, error.message);
+      logger.error('deadlock', `Failed to kill process ${pid} for task ${taskId}`, error.message);
     }
   }
 }
 
 async function checkDeadTasksandUpdate(threshold: number) {
-  const workspacesToRemove: string[] = [];
+  const runningTasks = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.status, 'running'));
 
-  await db.transaction(async (tx) => {
-    const runningTasks = await tx
-      .select()
-      .from(tasks)
-      .where(eq(tasks.status, 'running'));
+  if (runningTasks.length === 0) return;
 
-    for (const task of runningTasks) {
-      if (task.lastHeartbeat != null && task.lastHeartbeat < threshold) {
-        const pid = task.workerPid;
-        if (pid) {
-          await killTask(pid);
+  let staleCount = 0;
+  let failedCount = 0;
+
+  for (const task of runningTasks) {
+    if (task.lastHeartbeat != null && task.lastHeartbeat < threshold) {
+      const pid = task.workerPid;
+      if (pid) {
+        await killTask(task.id, pid);
+      }
+
+      const sm = new TaskStateMachine(task.status);
+      const retryCount = (task.retryCount ?? 0) + 1;
+      const maxRetries = task.maxRetries ?? 0;
+
+      if (retryCount >= maxRetries) {
+        try {
+          const next = sm.transitionTo('failed');
+          await db
+            .update(tasks)
+            .set({
+              status: next,
+              retryCount,
+              nextRetryAt: null,
+              workerPid: null,
+              workspacePath: null,
+              threadId: null,
+              turnId: null,
+              startedAt: null,
+              claimedAt: null,
+              lastHeartbeat: null,
+            })
+            .where(eq(tasks.id, task.id));
+
+          failedCount++;
+          logger.error('deadlock', `Task ${task.id} exceeded max retries (${maxRetries}) → failed`);
+        } catch {
+          logger.error('deadlock', `Failed to mark task ${task.id} as failed`);
         }
-        const sm = new TaskStateMachine(task.status);
-        const retryCount = (task.retryCount ?? 0) + 1;
-        const maxRetries = task.maxRetries ?? 0;
+      } else {
+        try {
+          const next = sm.transitionTo('crashed');
+          await db
+            .update(tasks)
+            .set({
+              status: next,
+              retryCount,
+              nextRetryAt: Date.now() + computeRetryDelayMs(retryCount),
+              workerPid: null,
+              workspacePath: null,
+              threadId: null,
+              turnId: null,
+              startedAt: null,
+              claimedAt: null,
+              lastHeartbeat: null,
+            })
+            .where(eq(tasks.id, task.id));
 
-        if (retryCount >= maxRetries) {
-          try {
-            const next = sm.transitionTo('failed');
-            await tx
-              .update(tasks)
-              .set({
-                status: next,
-                retryCount,
-                nextRetryAt: null,
-                workerPid: null,
-                workspacePath: null,
-                threadId: null,
-                turnId: null,
-                startedAt: null,
-                claimedAt: null,
-                lastHeartbeat: null,
-              })
-              .where(eq(tasks.id, task.id));
-
-            if (task.workspacePath) {
-              workspacesToRemove.push(task.workspacePath);
-            }
-          } catch {
-            console.error(`A task reached max retries and failed: ${task.id}`);
-          }
-        } else {
-          try {
-            const next = sm.transitionTo('crashed');
-            await tx
-              .update(tasks)
-              .set({
-                status: next,
-                retryCount,
-                nextRetryAt: Date.now() + computeRetryDelayMs(retryCount),
-                workerPid: null,
-                workspacePath: null,
-                threadId: null,
-                turnId: null,
-                startedAt: null,
-                claimedAt: null,
-                lastHeartbeat: null,
-              })
-              .where(eq(tasks.id, task.id));
-
-            if (task.workspacePath) {
-              workspacesToRemove.push(task.workspacePath);
-            }
-          } catch {
-            console.error(`Invalid transition for task ${task.id}`);
-          }
+          staleCount++;
+          logger.info('deadlock', `Task ${task.id} stale → crashed (retry ${retryCount}/${maxRetries})`);
+        } catch {
+          logger.error('deadlock', `Invalid transition for task ${task.id}`);
         }
       }
     }
-  });
+  }
 
-  for (const workspacePath of workspacesToRemove) {
-    await fs.rm(workspacePath, { recursive: true, force: true });
+  if (staleCount > 0 || failedCount > 0) {
+    logger.info('deadlock', `Deadlock check: ${staleCount} crashed, ${failedCount} failed out of ${runningTasks.length} running`);
   }
 }
 
 async function requeueRetryableTasks(now: number) {
+  const retryableTasks = await db
+    .select()
+    .from(tasks)
+    .where(
+      and(
+        inArray(tasks.status, ['crashed', 'failed']),
+        lt(tasks.nextRetryAt, now),
+        sql`${tasks.retryCount} < ${tasks.maxRetries}`,
+      ),
+    );
+
+  if (retryableTasks.length === 0) return;
+
+  let requeuedCount = 0;
   const workspacesToRemove: string[] = [];
 
-  await db.transaction(async (tx) => {
-    const retryableTasks = await tx
-      .select()
-      .from(tasks)
-      .where(
-        and(
-          inArray(tasks.status, ['crashed', 'failed']),
-          lt(tasks.nextRetryAt, now),
-          sql`${tasks.retryCount} < ${tasks.maxRetries}`,
-        ),
-      );
+  for (const task of retryableTasks) {
+    try {
+      const sm = new TaskStateMachine(task.status);
+      const next = sm.transitionTo('pending');
+      await db
+        .update(tasks)
+        .set({
+          status: next,
+          nextRetryAt: null,
+          claimedAt: null,
+          startedAt: null,
+          workerPid: null,
+          lastHeartbeat: null,
+          workspacePath: null,
+          threadId: null,
+          turnId: null,
+        })
+        .where(eq(tasks.id, task.id));
 
-    for (const task of retryableTasks) {
-      try {
-        const sm = new TaskStateMachine(task.status);
-        const next = sm.transitionTo('pending');
-        await tx
-          .update(tasks)
-          .set({
-            status: next,
-            nextRetryAt: null,
-            claimedAt: null,
-            startedAt: null,
-            workerPid: null,
-            lastHeartbeat: null,
-            workspacePath: null,
-            threadId: null,
-            turnId: null,
-          })
-          .where(eq(tasks.id, task.id));
+      requeuedCount++;
+      logger.info('retry', `Requeued task ${task.id} (${task.status} → pending)`);
 
-        if (task.workspacePath) {
-          workspacesToRemove.push(task.workspacePath);
-        }
-      } catch {
-        console.error(`Failed to requeue task ${task.id}`);
+      if (task.workspacePath) {
+        workspacesToRemove.push(task.workspacePath);
       }
+    } catch {
+      logger.error('retry', `Failed to requeue task ${task.id}`);
     }
-
-    if (retryableTasks.length > 0) {
-      console.log(
-        `[Retry] Requeued ${retryableTasks.length} tasks back to pending.`,
-      );
-    }
-  });
+  }
 
   for (const workspacePath of workspacesToRemove) {
     await fs.rm(workspacePath, { recursive: true, force: true });
@@ -213,31 +215,33 @@ async function requeueRetryableTasks(now: number) {
 }
 
 async function fetchCandidateIssue(config: Workflow) {
-  const owner: string = config.repoOwner;
-  const repo: string = config.repoName;
-  const ghToken: string = config.ghToken;
-  const label: string = config.issueTitle;
-  const fetchIssueResponse = await fetchIssue(owner, repo, label, ghToken);
+  logger.info('tracker', `Fetching issues from ${config.repoOwner}/${config.repoName} with label "${config.issueTitle}"`);
+
+  const fetchIssueResponse = await fetchIssue(
+    config.repoOwner,
+    config.repoName,
+    config.issueTitle,
+    config.ghToken,
+  );
 
   if (fetchIssueResponse.added > 0) {
-    console.log(
-      `[Tracker] Sync Successful: ${fetchIssueResponse.added} new tasks added to queue.`,
-    );
+    logger.info('tracker', `Added ${fetchIssueResponse.added} new issue(s) to queue`);
   }
-  if (fetchIssueResponse.errors.length > 0) {
-    console.warn(
-      `[Tracker] Sync completed with ${fetchIssueResponse.errors.length} issues skipped.`,
-    );
+
+  if (fetchIssueResponse.skipped > 0) {
+    logger.warn('tracker', `Skipped ${fetchIssueResponse.skipped} issue(s)`);
   }
-  fetchIssueResponse.errors.forEach((err: any, index: number) => {
+
+  for (const err of fetchIssueResponse.errors) {
     const detail =
-      err.type === 'VALIDATION_ERROR'
-        ? `Validation failed for #${err.issueNumber}`
-        : err.type === 'FETCH_ERROR'
-          ? `GitHub fetch failed: ${err.message || 'Unknown fetch error'}`
-        : `Database error: ${err.message || 'Unknown SQL error'}`;
-    console.error(`  -> Error [${index + 1}]: ${detail}`);
-  });
+      (err as any).type === 'VALIDATION_ERROR'
+        ? `Validation failed for issue #${(err as any).issueNumber}`
+        : (err as any).type === 'FETCH_ERROR'
+          ? `GitHub API error: ${(err as any).message}`
+          : `Database error: ${(err as any).message}`;
+    logger.error('tracker', detail);
+  }
+
   return fetchIssueResponse;
 }
 
@@ -247,49 +251,53 @@ async function dispatchTasks(config: Workflow) {
     .from(tasks)
     .where(sql`${tasks.status} IN ('running', 'claimed', 'verifying')`);
 
-  const availableSlot = config.maxConcurrent - (activeCount[0]?.count ?? 0);
+  const active = activeCount[0]?.count ?? 0;
+  const availableSlot = config.maxConcurrent - active;
 
   if (availableSlot <= 0) {
-    console.log('[Dispatcher] Max concurrency reached. Skipping dispatch.');
+    logger.info('dispatch', `At capacity: ${active}/${config.maxConcurrent} workers active`);
     return;
   }
 
+  const candidates = await db
+    .select()
+    .from(tasks)
+    .where(eq(tasks.status, 'pending'))
+    .orderBy(tasks.createdAt)
+    .limit(availableSlot);
+
+  if (candidates.length === 0) {
+    logger.info('dispatch', 'No pending tasks to dispatch');
+    return;
+  }
+
+  logger.info('dispatch', `Claiming ${candidates.length} task(s) for dispatch (${active}/${config.maxConcurrent} active)`);
+
   const taskToLaunch: Task[] = [];
 
-  await db.transaction(async (tx) => {
-    const candidates = await tx
-      .select()
-      .from(tasks)
-      .where(eq(tasks.status, 'pending'))
-      .orderBy(tasks.createdAt)
-      .limit(availableSlot);
+  for (const task of candidates) {
+    const sm = new TaskStateMachine(task.status);
+    const nextStatus = sm.transitionTo('claimed');
 
-    for (const task of candidates) {
-      const sm = new TaskStateMachine(task.status);
-      const nextStatus = sm.transitionTo('claimed');
+    const updatedTask = await db
+      .update(tasks)
+      .set({ status: nextStatus, claimedAt: Date.now() })
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, 'pending')))
+      .returning();
 
-      const updatedTask = await tx
-        .update(tasks)
-        .set({ status: nextStatus, claimedAt: Date.now() })
-        .where(and(eq(tasks.id, task.id), eq(tasks.status, 'pending')))
-        .returning();
-
-      const claimedTask = updatedTask[0];
-
-      if (!claimedTask) {
-        continue;
-      }
-
-      taskToLaunch.push(claimedTask);
+    const claimedTask = updatedTask[0];
+    if (!claimedTask) {
+      continue;
     }
-  });
 
-  console.log(
-    `[Dispatcher] Successfully claimed ${taskToLaunch.length} tasks. Spawning workers...`,
-  );
+    taskToLaunch.push(claimedTask);
+    logger.info('dispatch', `Claimed task ${task.id} (${task.issueTitle})`);
+  }
 
   for (const task of taskToLaunch) {
     try {
+      logger.info('dispatch', `Setting up workspace for task ${task.id}...`);
+
       const workspacePath = await setupWorkspace(
         task.id,
         task.repoOwner,
@@ -299,24 +307,21 @@ async function dispatchTasks(config: Workflow) {
 
       await db
         .update(tasks)
-        .set({
-          workspacePath,
-        })
+        .set({ workspacePath })
         .where(eq(tasks.id, task.id));
 
-      const workerid = await launchTaskProcess({
+      const workerPid = await launchTaskProcess({
         ...task,
         workspacePath,
       });
-      console.log(`Launched task:${task.id} with worker: ${workerid}`);
+
+      logger.info('dispatch', `Launched task ${task.id} → worker PID ${workerPid}`);
     } catch (error) {
-      console.error(`[Dispatcher] Failed to prepare task ${task.id}:`, error);
+      logger.error('dispatch', `Failed to launch task ${task.id}`, error);
 
       const retryCount = (task.retryCount ?? 0) + 1;
       const maxRetries = task.maxRetries ?? 0;
-      const nextStatus = new TaskStateMachine('claimed').transitionTo(
-        'crashed',
-      );
+      const nextStatus = new TaskStateMachine('claimed').transitionTo('crashed');
 
       await db
         .update(tasks)
@@ -343,15 +348,18 @@ async function VerifyTasks(config: Workflow) {
 }
 
 export async function tick(config: Workflow) {
-  console.log(`\nTick Start: ${new Date().toLocaleTimeString()}`);
+  logger.info('tick', '─── Tick started ───');
+
+  const tickStart = Date.now();
   const now = Date.now();
   const threshold = now - config.thresholdMs;
+
   await checkDeadTasksandUpdate(threshold);
   await requeueRetryableTasks(now);
-
   await fetchCandidateIssue(config);
-
   await dispatchTasks(config);
-
   await VerifyTasks(config);
+
+  const elapsed = Date.now() - tickStart;
+  logger.info('tick', `Tick completed in ${elapsed}ms`);
 }

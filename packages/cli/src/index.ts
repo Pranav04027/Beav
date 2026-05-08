@@ -1,5 +1,7 @@
-const command = process.argv[2];
+const commandraw = process.argv[2];
 const arg = process.argv[3];  
+
+const command = commandraw?.toLowerCase().trim()
 
 async function main() {
   switch (command) {

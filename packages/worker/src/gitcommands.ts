@@ -45,25 +45,30 @@ export async function createPR(task: Task): Promise<boolean> {
   }
   const branch = `beav-fix-${task.id}`;
 
+  console.error(`[pr] Creating branch: ${branch}`);
   await run('git', ['checkout', '-B', branch], cwd);
 
+  console.error('[pr] Staging changes...');
   await run('git', ['add', '.'], cwd);
 
   // avoid empty commit
   try {
     await run('git', ['diff', '--cached', '--quiet'], cwd);
-    console.log('No changes → skipping commit + PR');
+    console.error('[pr] No changes to commit → skipping');
     return false;
   } catch {
     const safeTitle = task.issueTitle.replace(/[\n\r]/g, ' ');
+    console.error(`[pr] Committing: fix: ${safeTitle}`);
     await run('git', ['commit', '-m', `fix: ${safeTitle}`], cwd);
   }
 
+  console.error('[pr] Pushing branch to origin...');
   await run('git', ['push', '-u', 'origin', branch], cwd);
 
   const exists = await prExists(branch, cwd);
 
   if (!exists) {
+    console.error(`[pr] Creating PR for ${branch} → #${task.githubIssueNumber}`);
     try {
       await run(
         'gh',
@@ -81,13 +86,14 @@ export async function createPR(task: Task): Promise<boolean> {
         ],
         cwd,
       );
+      console.error('[pr] PR created successfully');
       return true;
     } catch (error) {
-      console.error('PR creation failed:', error);
+      console.error('[pr] PR creation failed:', error);
       return false;
     }
   } else {
-    console.log('PR already exists → skipping');
+    console.error('[pr] PR already exists → skipping');
     return true;
   }
 }
