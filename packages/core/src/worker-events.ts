@@ -22,6 +22,7 @@ export type WorkerEvent =
       taskId: string;
       error: string;
       ts: number;
+      retryCount: number;
     }
   | {
       type: 'completed';
@@ -61,7 +62,8 @@ export function isWorkerEvent(value: unknown): value is WorkerEvent {
       return (
         typeof event.taskId === 'string' &&
         typeof event.error === 'string' &&
-        typeof event.ts === 'number'
+        typeof event.ts === 'number' &&
+        typeof event.retryCount === 'number'
       );
     case 'completed':
       return (

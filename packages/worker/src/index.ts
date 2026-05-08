@@ -144,6 +144,7 @@ async function run(task: Task) {
         taskId: task.id,
         error: message,
         ts: Date.now(),
+        retryCount: task.retryCount ?? 0,
       });
     } catch (sendError) {
       logger.error(tag, 'Failed to send worker failure event', sendError);
@@ -433,6 +434,7 @@ void main().catch(async (error) => {
       taskId: task.id,
       error: error instanceof Error ? error.message : String(error),
       ts: Date.now(),
+      retryCount: task.retryCount ?? 0,
     });
   } catch (sendError) {
     logger.error('worker', 'Failed to send uncaught failure event', sendError);

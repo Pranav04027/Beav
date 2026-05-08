@@ -180,9 +180,9 @@ test('removeDuplicates([1, 2, 2, 3, 3, 3]) should return [1, 2, 3]', () => {
   if (JSON.stringify(result) !== JSON.stringify([1, 2, 3])) throw { expected: '[1,2,3]', actual: JSON.stringify(result) };
 });
 
-test('unique([1, 2, 2, 3]) should return [1]', () => {
+test('unique([1, 2, 2, 3]) should return [1, 2, 3]', () => {
   const result = unique([1, 2, 2, 3]);
-  if (JSON.stringify(result) !== JSON.stringify([1])) throw { expected: '[1]', actual: JSON.stringify(result) };
+  if (JSON.stringify(result) !== JSON.stringify([1, 2, 3])) throw { expected: '[1,2,3]', actual: JSON.stringify(result) };
 });
 
 test('flatten([[1, 2], [3, 4]]) should return [1, 2, 3, 4]', () => {

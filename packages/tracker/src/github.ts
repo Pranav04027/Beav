@@ -128,7 +128,8 @@ export async function checkVerifyingTasks(config: Workflow) {
 
       // merged = done
       if (pr.merged_at) {
-        await mark(task.id, "done");
+        logger.info(`verify:${task.id}`, "PR merged → deleting from DB");
+        await db.delete(tasks).where(eq(tasks.id, task.id));
         return;
       }
 
@@ -146,10 +147,9 @@ export async function checkVerifyingTasks(config: Workflow) {
 
       const runs = data.check_runs;
 
-      // no CI = done
+      // no CI = wait for merge
       if (runs.length === 0) {
-        logger.info(`verify:${task.id}`, "No CI checks found → marking done");
-        await mark(task.id, "done");
+        logger.info(`verify:${task.id}`, "No CI checks found → waiting for merge");
         return;
       }
 
@@ -162,7 +162,7 @@ export async function checkVerifyingTasks(config: Workflow) {
         return;
       }
 
-      // all success = done
+      // all success = wait for merge
       if (
         runs.every(
           r =>
@@ -170,8 +170,7 @@ export async function checkVerifyingTasks(config: Workflow) {
             r.conclusion === "success"
         )
       ) {
-        logger.info(`verify:${task.id}`, "All checks passed → marking done");
-        await mark(task.id, "done");
+        logger.info(`verify:${task.id}`, "All checks passed → waiting for merge");
         return;
       }
 

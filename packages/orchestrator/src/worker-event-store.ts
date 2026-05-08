@@ -33,17 +33,25 @@ export async function persistWorkerEvent(
         })
         .where(eq(tasks.id, event.taskId));
       return;
-    case 'failed':
+    case 'failed': {
       await database.insert(taskLogs).values({
         taskId: event.taskId,
         stream: 'system',
         line: `worker error: ${event.error}`,
         ts: event.ts,
       });
+      const nextRetryCount = event.retryCount + 1;
+      const maxRetries = 3;
+      const nextRetryAt =
+        nextRetryCount >= maxRetries
+          ? null
+          : event.ts + 10_000 * 2 ** nextRetryCount;
       await database
         .update(tasks)
         .set({
           status: 'failed',
+          retryCount: nextRetryCount,
+          nextRetryAt,
           workspacePath: null,
           threadId: null,
           turnId: null,
@@ -52,6 +60,7 @@ export async function persistWorkerEvent(
         })
         .where(eq(tasks.id, event.taskId));
       return;
+    }
     case 'completed':
       await database
         .update(tasks)
