@@ -1,10 +1,13 @@
-# Beav
+# Beav 🦫
 
-Autonomous issue resolution agent with GitHub integration and automated PR workflow.
+Autonomous GitHub issue resolution system powered by Codex AI agents.
 
-## Overview
+Beav monitors repositories for labeled issues, spawns isolated parallel workers using OpenAI Codex, creates pull requests, verifies CI, and automatically retries failed executions.
 
-Beav monitors GitHub repositories for labeled issues, autonomously analyzes them, applies fixes, and submits pull requests — handling failures and retries automatically.
+## Demo
+
+## System Evolution
+/images/architecture.png
 
 ## Architecture
 
