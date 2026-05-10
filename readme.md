@@ -7,7 +7,7 @@ Beav monitors repositories for labeled issues, spawns isolated parallel workers 
 ## Demo
 
 ## System Evolution
-/images/systemArchitecture1.png
+![System Architecture 1](images/systemArchitecture1.png)
 
 ## Architecture
 
