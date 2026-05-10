@@ -55,8 +55,24 @@ The result is a cleaner and more modular autonomous issue resolution system.
 ## Core Concepts
 
 ### Stateful Task Lifecycle
+
+Beav manages every issue through a persistent task state machine:
+
+`pending → claimed → running → verifying → done/failed/crashed`
+
+The orchestrator coordinates all transitions, tracks execution metadata, and monitors worker health through heartbeat updates. Failed or crashed tasks are automatically recovered and requeued according to retry policies and backoff rules.
+
+
 ### Process Isolation
+
+Each task executes inside an isolated git-cloned workspace and dedicated worker process.  
+Workers spawn Codex app-server instances and communicate through JSON-RPC IPC channels. Workspace isolation, PID tracking, and file-system safety checks prevent interference between concurrent executions and protect against path traversal outside the workspace boundary.
+
+
 ### Recovery & Retries
+
+Beav continuously monitors worker heartbeats to detect stalled or crashed executions.  
+Dead workers are cleaned up automatically, and recoverable tasks are requeued using exponential backoff retry logic. The orchestrator handles crash recovery, retry scheduling, and stale task reconciliation to maintain reliable long-running autonomous execution.
 
 ## Architecture
 
