@@ -7,7 +7,56 @@ Beav monitors repositories for labeled issues, spawns isolated parallel workers 
 ## Demo
 
 ## System Evolution
+
+Beav evolved through two major architectural phases.
+
+### Phase 1 — Fully Custom Agent Architecture
+
 ![System Architecture 1](images/systemArchitecture1.png)
+
+The initial version of Beav implemented a fully custom autonomous agent pipeline.
+
+The worker layer was responsible for:
+- agent reasoning
+- tool execution
+- memory persistence
+- retry coordination
+- heartbeat tracking
+
+This architecture focused heavily on building a stateful ReAct-style execution loop from scratch, with the orchestrator managing recovery, retries, and workspace isolation around it.
+
+### Phase 2 — Codex-Native Orchestration Architecture
+
+![System Architecture 2](images/systemArchitecture2.png)
+
+The architecture later evolved into a Codex-native distributed system.
+
+Instead of implementing custom reasoning internally, Beav now delegates:
+- code reasoning
+- iterative debugging
+- tool usage
+- repository modification
+
+to Codex app-server through JSON-RPC IPC communication.
+
+This significantly simplified the worker layer and allowed Beav to focus on:
+- orchestration
+- concurrent worker execution
+- crash recovery
+- PR lifecycle management
+- CI verification
+- task state management
+
+The result is a cleaner and more modular autonomous issue resolution system.
+
+## Execution Flow
+![Sequence Diagram](images/BeavTimeFlowDiagram.png)
+
+## Core Concepts
+
+### Stateful Task Lifecycle
+### Process Isolation
+### Recovery & Retries
 
 ## Architecture
 
@@ -21,16 +70,6 @@ Beav monitors repositories for labeled issues, spawns isolated parallel workers 
 │  CLI          │ User interface for status & logs       │
 └─────────────────────────────────────────────────────────┘
 ```
-
-## Key Features
-
-- **State Machine**: Full task lifecycle (pending → claimed → running → verifying → done)
-- **Crash Recovery**: Automatic detection and requeue of failed tasks with exponential backoff
-- **Concurrency Control**: Configurable max concurrent workers
-- **Workspace Isolation**: Each task runs in a fresh git-cloned workspace with path traversal protection
-- **GitHub Integration**: Octokit-based issue tracking with deduplication
-- **Process Guard**: Child process PID tracking for force-kill on heartbeat failure
-
 ## Tech Stack
 
 | Layer           | Technology                      |
@@ -39,17 +78,6 @@ Beav monitors repositories for labeled issues, spawns isolated parallel workers 
 | API Client      | Octokit REST                    |
 | Runtime         | Node.js                         |
 | Package Manager | pnpm (monorepo)                 |
-
-## Project Structure
-
-```
-packages/
-├── core/          # Shared types, schema, state machine, database
-├── tracker/       # GitHub issue fetching & deduplication
-├── orchestrator/  # Task scheduling, dispatch, recovery, workspaces
-├── worker/        # Agent execution & PR creation
-└── cli/           # User-facing commands (start, status, logs)
-```
 
 ## Getting Started
 
@@ -79,16 +107,6 @@ beav status   # View active tasks
 beav logs <id># Tail task logs
 ```
 
-## Task Lifecycle
+## Example Run Logs:
 
-```
-pending → claimed → running → verifying → done
-    ↑                  ↓
-    └───── crashed ←───┘
-              ↓
-         (retries)
-              ↓
-           failed
-```
-
-Tasks transition to `crashed` on worker failure or heartbeat timeout. After max retries, they reach `failed`. The orchestrator automatically requeues eligible tasks on each tick.
+## Future Improvements
