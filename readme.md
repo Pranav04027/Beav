@@ -124,6 +124,7 @@ beav logs <id># Tail task logs
 ```
 
 ## Example Run Logs:
+```
 pranav@Pranav:~/projects/Beav$ ls
 Beav_Test_Repo  images  node_modules  package.json  packages  pnpm-lock.yaml  pnpm-workspace.yaml  readme.md  tsconfig.json
 pranav@Pranav:~/projects/Beav$ pnpm start
@@ -388,5 +389,6 @@ pranav@Pranav:~/projects/Beav$ pnpm start
 17:56:57 INFO [verifier] Processing batch 1 (3 tasks)
 17:56:58 INFO [verify:01KRAM0KQBGAQN27VG34PC070R] PR #31: state=closed, merged=true
 17:56:58 INFO [verify:01KRAM0KQBGAQN27VG34PC070R] PR merged → deleting from DB
+```
 
 ## Future Improvements
