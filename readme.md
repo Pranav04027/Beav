@@ -358,14 +358,6 @@ pranav@Pranav:~/projects/Beav$ pnpm start
 17:56:31 INFO [verify:01KRAM0KQKY1601FBDMJY0WRZK] PR #30: state=open, merged=false
 17:56:31 INFO [verify:01KRAM0KQKTRNW47H5N2WZNHV6] PR #32: state=closed, merged=true
 17:56:31 INFO [verify:01KRAM0KQKTRNW47H5N2WZNHV6] PR merged → deleting from DB
-17:56:31  ERR [verify:01KRAM0KQKTRNW47H5N2WZNHV6] Verification error SqliteError: FOREIGN KEY constraint failed
-    at PreparedQuery.run (/home/pranav/projects/Beav/node_modules/.pnpm/drizzle-orm@0.45.2_@types+better-sqlite3@7.6.13_better-sqlite3@12.8.0/node_modules/src/better-sqlite3/session.ts:132:20)
-    at QueryPromise.resultCb (/home/pranav/projects/Beav/node_modules/.pnpm/drizzle-orm@0.45.2_@types+better-sqlite3@7.6.13_better-sqlite3@12.8.0/node_modules/src/sqlite-core/session.ts:185:61)
-    at QueryPromise.execute (/home/pranav/projects/Beav/node_modules/.pnpm/drizzle-orm@0.45.2_@types+better-sqlite3@7.6.13_better-sqlite3@12.8.0/node_modules/src/sqlite-core/session.ts:31:15)
-    at QueryPromise.then (/home/pranav/projects/Beav/node_modules/.pnpm/drizzle-orm@0.45.2_@types+better-sqlite3@7.6.13_better-sqlite3@12.8.0/node_modules/src/query-promise.ts:31:15)
-    at process.processTicksAndRejections (node:internal/process/task_queues:95:5) {
-  code: 'SQLITE_CONSTRAINT_FOREIGNKEY'
-}
 17:56:31 INFO [verify:01KRAM0KQBGAQN27VG34PC070R] No CI checks found → waiting for merge
 17:56:31 INFO [verify:01KRAM0KQKY1601FBDMJY0WRZK] No CI checks found → waiting for merge
 17:56:31 INFO [tick] Tick completed in 2079ms
