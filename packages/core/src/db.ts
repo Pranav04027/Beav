@@ -41,7 +41,7 @@ sqlite.exec(`
 sqlite.exec(`
   CREATE TABLE IF NOT EXISTS taskLogs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    task_id TEXT NOT NULL REFERENCES tasks(id),
+    task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     stream TEXT NOT NULL,
     line TEXT NOT NULL,
     ts INTEGER

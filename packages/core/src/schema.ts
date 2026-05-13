@@ -51,7 +51,7 @@ export const tasks = sqliteTable("tasks", {
 
 export const taskLogs = sqliteTable("taskLogs", {
     id: integer("id").primaryKey({ autoIncrement: true }),
-    taskId: text("task_id").notNull().references(() => tasks.id),
+    taskId: text("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
     stream: text("stream", { enum: ["stdout", "stderr", "system"] }).notNull(),
     line: text("line").notNull(),
     ts: integer("ts")
