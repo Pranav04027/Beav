@@ -1,58 +1,72 @@
-import { sqliteTable, integer, text, uniqueIndex, index } from "drizzle-orm/sqlite-core"
+import {
+  sqliteTable,
+  integer,
+  text,
+  uniqueIndex,
+  index,
+} from 'drizzle-orm/sqlite-core';
 
-export const tasks = sqliteTable("tasks", {
-    //ULID
-    id: text("id").primaryKey(),
+import { taskStatuses } from './state-machine.js';
+
+export const tasks = sqliteTable(
+  'tasks',
+  {
+    // Task ID: existing ULIDs and new UUIDs are both supported.
+    id: text('id').primaryKey(),
 
     //Github link
-    githubIssueId: integer("githubIssueId").notNull(),
-    githubIssueNumber: integer("githubIssueNumber").notNull(),
-    htmlUrl: text("html_url").notNull(),
-    repoOwner: text("repoOwner").notNull(),
-    repoName: text("repoName").notNull(),
-    issueTitle: text("issueTitle").notNull(),
-    body: text("body"),
+    githubIssueId: integer('githubIssueId').notNull(),
+    githubIssueNumber: integer('githubIssueNumber').notNull(),
+    htmlUrl: text('html_url').notNull(),
+    repoOwner: text('repoOwner').notNull(),
+    repoName: text('repoName').notNull(),
+    issueTitle: text('issueTitle').notNull(),
+    body: text('body'),
 
     //State Machine
-    status: text("status", { enum: ["pending", "claimed", "running", "done", "verifying", "failed", "crashed"] }).notNull().default("pending"),
+    status: text('status', { enum: taskStatuses }).notNull().default('pending'),
 
-    //Resiliance
-    retryCount: integer("retryCount").default(0),
-    maxRetries: integer("max_retries").default(3),
+    // Retry bookkeeping
+    retryCount: integer('retryCount').default(0),
+    maxRetries: integer('max_retries').default(3),
 
     //Execution Data
-    workspacePath: text("workspacePath"),
-    workerPid: integer("workerPid"),
-    
-    //codex server pid
-    threadId: text("threadId"),
-    turnId: text("turnId"),
-    
+    workspacePath: text('workspacePath'),
+    workerPid: integer('workerPid'),
+
+    // Agent session identifiers (diagnostics; retries do not resume sessions)
+    threadId: text('threadId'),
+    turnId: text('turnId'),
+
     //PR check data
-    prURL: text("prURL"),
-    prNumber: integer("prNumber"),
-    commitSha: text("commitSha"),
+    prURL: text('prURL'),
+    prNumber: integer('prNumber'),
+    commitSha: text('commitSha'),
 
     //Timestamps
-    lastHeartbeat: integer("lastHeartbeat"),
-    claimedAt: integer("claimedAt"),
-    nextRetryAt: integer("nextRetryAt"),
-    startedAt: integer("startedAt"),
-    completedAt: integer("completedAt"),
-    createdAt: integer("createdAt")
-}, (table) => ({
-    statusIdx: index("tasks_status_idx").on(table.status),
-    uniqueRepoIssue: uniqueIndex("uniqueRepoIssue").on(
-      table.repoOwner, 
-      table.repoName, 
-      table.githubIssueNumber
+    lastHeartbeat: integer('lastHeartbeat'),
+    claimedAt: integer('claimedAt'),
+    nextRetryAt: integer('nextRetryAt'),
+    startedAt: integer('startedAt'),
+    completedAt: integer('completedAt'),
+    createdAt: integer('createdAt'),
+  },
+  (table) => ({
+    statusIdx: index('tasks_status_idx').on(table.status),
+    uniqueRepoIssue: uniqueIndex('uniqueRepoIssue').on(
+      table.repoOwner,
+      table.repoName,
+      table.githubIssueNumber,
     ),
-}));
+  }),
+);
 
-export const taskLogs = sqliteTable("taskLogs", {
-    id: integer("id").primaryKey({ autoIncrement: true }),
-    taskId: text("task_id").notNull().references(() => tasks.id, { onDelete: "cascade" }),
-    stream: text("stream", { enum: ["stdout", "stderr", "system"] }).notNull(),
-    line: text("line").notNull(),
-    ts: integer("ts")
+export const taskLogs = sqliteTable('taskLogs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  taskId: text('task_id')
+    .notNull()
+    .references(() => tasks.id, { onDelete: 'cascade' }),
+  stream: text('stream', { enum: ['stdout', 'stderr', 'system'] }).notNull(),
+  line: text('line').notNull(),
+  ts: integer('ts'),
 });

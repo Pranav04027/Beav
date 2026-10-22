@@ -1,1 +1,2 @@
-export * from "./github.js"
+export { createGitHubClient } from './github.js';
+export type { GitHubClient, PullRequestState } from './github.js';

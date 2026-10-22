@@ -1,43 +1,58 @@
-const commandraw = process.argv[2];
-const arg = process.argv[3];  
-
-const command = commandraw?.toLowerCase().trim()
+#!/usr/bin/env node
+import { applicationPaths, loadEnvironment } from '@beav/core/config';
+import { openDatabase } from '@beav/core/db';
+import { createTaskStore } from '@beav/core/task-store';
 
 async function main() {
-  switch (command) {
-    case 'setup': {
-      const { setup } = await import('./setup.js');
-      await setup();
-      break;
-    }
-
-    case 'start': {
-      const { start } = await import('@beav/orchestrator');
-      await start();
-      break;
-    }
-    case 'status':
-      console.log('beav status');
-      break;
-    case 'logs':
-      console.log('beav logs');
-      break;
-    case 'worker': {
-      if (!arg) {
-        throw new Error('Usage: beav worker <taskId>');
-      }
-
-      const { launchTaskProcess, loadTaskForLaunch } = await import('@beav/orchestrator');
-      const task = await loadTaskForLaunch(arg);
-      const pid = await launchTaskProcess(task);
-      console.log(`Launched worker ${pid} for task ${arg}`);
-      break;
-    }
-    default:
-      console.log('Usage: beav <setup|start|status|logs|worker>');
+  const command = process.argv[2]?.trim().toLowerCase();
+  const argument = process.argv[3];
+  if (command === 'setup') {
+    const { setup } = await import('./setup.js');
+    await setup();
+    return;
   }
+  if (command === 'start') {
+    const { start } = await import('@beav/orchestrator');
+    await start();
+    return;
+  }
+  if (command === 'worker') {
+    if (!argument) throw new Error('Usage: beav worker <taskId>');
+    const { startTask } = await import('@beav/orchestrator/manual');
+    await startTask(argument);
+    return;
+  }
+  if (command === 'status' || command === 'logs') {
+    loadEnvironment();
+    const connection = openDatabase(applicationPaths().databasePath);
+    try {
+      const store = createTaskStore(connection.database);
+      if (command === 'status')
+        console.table(
+          store.list().map((task) => ({
+            id: task.id,
+            issue: task.githubIssueNumber,
+            status: task.status,
+            retries: task.retryCount,
+            pr: task.prURL,
+          })),
+        );
+      else
+        for (const entry of store.logs(argument)) {
+          console.log(
+            new Date(entry.ts ?? 0).toISOString(),
+            entry.taskId,
+            entry.stream,
+            entry.line,
+          );
+        }
+    } finally {
+      connection.close();
+    }
+    return;
+  }
+  console.log('Usage: beav <setup|start|status|logs [taskId]|worker taskId>');
 }
-
 void main().catch((error) => {
   console.error(error);
   process.exitCode = 1;

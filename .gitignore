@@ -19,3 +19,9 @@ pnpm-debug.log*
 coverage/
 .nyc_output/
 *.tsbuildinfo
+
+# Runtime data (already tracked databases are left untouched)
+*.db
+*.db-wal
+*.db-shm
+packages/cli/workspaces/

@@ -1,121 +1,226 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { spawn, type ChildProcess } from "node:child_process";
-import { db, eq, type Task, type WorkerEvent, logger } from "@beav/core";
-import { tasks } from "@beav/core";
-import { handleWorkerMessage } from "./worker-events.js";
+import { spawn, type ChildProcess } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { AssignedTaskSchema } from '@beav/core/worker-events';
+import { fileURLToPath } from 'node:url';
+import type { Task, TaskStore } from '@beav/core';
+import * as logger from '@beav/core/logger';
+import { removeWorkspace } from '@beav/core/workspace';
+import { createWorkerReports } from './worker-events.js';
+import { recordExecutionFailure } from './retries.js';
 
-const workerEntryPoint = fileURLToPath(
-  new URL("../../worker/dist/index.js", import.meta.url),
-);
-const activeWorkers = new Map<string, ChildProcess>();
+type ActiveWorker = { process: ChildProcess; closed: Promise<void> };
 
-export async function loadTaskForLaunch(taskId: string): Promise<Task> {
-  const task = await db.query.tasks.findFirst({
-    where: eq(tasks.id, taskId),
-  });
-
-  if (!task) {
-    throw new Error(`Task not found: ${taskId}`);
+function signalWorker(pid: number, signal: NodeJS.Signals) {
+  try {
+    // Workers lead a process group on POSIX, including Codex and git/gh children.
+    process.kill(process.platform === 'win32' ? pid : -pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
   }
-
-  if (!task.workspacePath) {
-    throw new Error(`Task ${taskId} is missing workspacePath`);
-  }
-
-  return task;
 }
 
-export async function launchTaskProcess(task: Task) {
-  const serializedTask = JSON.stringify(task);
-  const proc = spawn(
-    process.execPath,
-    [workerEntryPoint],
-    {
-      stdio: ["inherit", "inherit", "inherit", "ipc"],
-      env: {
-        ...process.env,
-        BEAV_WORKER_TASK: serializedTask,
-      },
-      cwd: path.resolve(path.dirname(workerEntryPoint), "../.."),
-    },
-  );
+export function createWorkerManager(store: TaskStore, workspaceRoot: string) {
+  const active = new Map<string, ActiveWorker>();
 
-  let workerMessages = Promise.resolve();
-  activeWorkers.set(task.id, proc);
-
-  proc.on("message", (message) => {
-    workerMessages = workerMessages
-      .then(() => handleWorkerMessage(message as WorkerEvent))
-      .catch((error) => {
-        logger.error(`worker:${task.id}`, "Failed to persist worker event", error);
-      });
-  });
-
-  proc.once("exit", (code, signal) => {
-    activeWorkers.delete(task.id);
-    logger.info(`worker:${task.id}`, `Process exited (code=${code ?? "null"}, signal=${signal ?? "null"})`);
-  });
-
-  proc.once("error", (error) => {
-    activeWorkers.delete(task.id);
-    logger.error(`worker:${task.id}`, "Process spawn error", error);
-  });
-
-  await db.update(tasks)
-    .set({
-      workerPid: proc.pid,
-      status: "running",
-      startedAt: Date.now(),
-    })
-    .where(eq(tasks.id, task.id));
-
-  logger.info(`worker:${task.id}`, `Spawned worker PID ${proc.pid}`);
-
-  return proc.pid;
-}
-
-export async function stopActiveWorkers(signal: NodeJS.Signals = "SIGTERM") {
-  if (activeWorkers.size === 0) {
-    logger.info("orchestrator", "No active workers to stop");
-    return;
-  }
-
-  logger.info("orchestrator", `Stopping ${activeWorkers.size} active worker(s)...`);
-
-  const exits = Array.from(activeWorkers.entries()).map(([taskId, proc]) => {
-    return new Promise<void>((resolve) => {
-      if (proc.exitCode != null || proc.killed) {
-        activeWorkers.delete(taskId);
-        resolve();
-        return;
-      }
-
-      const timeout = setTimeout(() => {
-        logger.warn(`worker:${taskId}`, "Worker did not exit within 5s, force killing");
-        try {
-          proc.kill("SIGKILL");
-        } catch (error) {
-          logger.error(`worker:${taskId}`, "Failed to force kill worker", error);
-        }
-      }, 5000);
-
-      proc.once("exit", () => {
-        clearTimeout(timeout);
-        resolve();
-      });
-
-      try {
-        proc.kill(signal);
-        logger.info(`worker:${taskId}`, `Sent ${signal} to worker`);
-      } catch (error) {
-        clearTimeout(timeout);
-        logger.error(`worker:${taskId}`, "Failed to send signal to worker", error);
-        resolve();
-      }
+  async function launch(task: Task) {
+    if (active.has(task.id))
+      throw new Error('Task already has a live worker: ' + task.id);
+    if (!task.workspacePath || task.claimedAt === null)
+      throw new Error('Task must be claimed and have a workspace');
+    const assignment = AssignedTaskSchema.parse({
+      ...task,
+      workspaceRoot,
+      retryCount: task.retryCount ?? 0,
     });
-  });
+    const proc = spawn(
+      process.execPath,
+      [fileURLToPath(import.meta.resolve('@beav/worker'))],
+      {
+        stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+        detached: process.platform !== 'win32',
+        env: { ...process.env, BEAV_WORKER_TASK: JSON.stringify(assignment) },
+      },
+    );
+    // No await before this write: incoming IPC cannot race markRunning.
+    let running: Task | undefined;
+    let launchError: unknown;
+    try {
+      running = proc.pid ? store.markRunning(task, proc.pid) : undefined;
+    } catch (error) {
+      launchError = error;
+    }
+    const owner = running ?? task;
+    const reports = createWorkerReports(owner, store);
+    let started = false;
+    let cleanupDeadline: NodeJS.Timeout | undefined;
 
-  await Promise.all(exits);
-  logger.info("orchestrator", "All workers stopped");
+    proc.on('message', (message) => {
+      void reports
+        .handle(message)
+        .then((accepted) => {
+          const event = message as { type?: string };
+          if (
+            (event.type === 'completed' || event.type === 'failed') &&
+            proc.connected
+          ) {
+            cleanupDeadline ??= setTimeout(() => {
+              try {
+                if (proc.pid) signalWorker(proc.pid, 'SIGKILL');
+              } catch (error) {
+                logger.error(
+                  'worker',
+                  'Could not stop worker after terminal report',
+                  error,
+                );
+              }
+            }, 5000);
+            proc.send(
+              { type: 'ack', taskId: task.id, event: event.type, accepted },
+              (error) => {
+                if (error)
+                  logger.warn(
+                    'ipc',
+                    'Could not acknowledge final report: ' + error.message,
+                  );
+              },
+            );
+          }
+        })
+        .catch((error) => logger.error('ipc', 'Worker report failed', error));
+    });
+    proc.on('error', (error) =>
+      logger.error('worker', 'Process error for ' + task.id, error),
+    );
+
+    const closed = new Promise<void>((resolve) => {
+      proc.once('close', () => {
+        if (cleanupDeadline) clearTimeout(cleanupDeadline);
+        void (async () => {
+          await reports.drain();
+          if (proc.pid) signalWorker(proc.pid, 'SIGKILL');
+          recordExecutionFailure(
+            store,
+            started ? owner : task,
+            started ? 'crash' : 'launch',
+            'Worker exited without an accepted result',
+          );
+          const current = store.get(task.id);
+          if (current && current.claimedAt === task.claimedAt) {
+            await removeWorkspace(task.id, workspaceRoot);
+            store.clearWorkspace(current);
+          }
+        })()
+          .catch((error) =>
+            logger.error('worker', 'Exit recovery failed', error),
+          )
+          .finally(() => {
+            active.delete(task.id);
+            resolve();
+          });
+      });
+    });
+    active.set(task.id, { process: proc, closed });
+
+    if (!running) {
+      if (proc.pid) signalWorker(proc.pid, 'SIGKILL');
+      await closed;
+      throw (
+        launchError ??
+        new Error('Worker failed to launch or task claim was lost')
+      );
+    }
+    try {
+      await new Promise<void>((resolve, reject) =>
+        proc.send({ type: 'start', taskId: task.id }, (error) => {
+          if (error) reject(error);
+          else resolve();
+        }),
+      );
+      started = true;
+    } catch (error) {
+      if (proc.pid) signalWorker(proc.pid, 'SIGKILL');
+      await closed;
+      throw error;
+    }
+    logger.info('worker', 'Launched ' + task.id + ' as PID ' + proc.pid);
+    return proc.pid!;
+  }
+
+  async function stop(
+    task: Pick<Task, 'id' | 'workerPid'> &
+      Partial<Pick<Task, 'claimedAt' | 'retryCount'>>,
+  ) {
+    const worker = active.get(task.id);
+    if (worker) {
+      if (worker.process.pid) signalWorker(worker.process.pid, 'SIGTERM');
+      const timer = setTimeout(() => {
+        if (worker.process.pid) signalWorker(worker.process.pid, 'SIGKILL');
+      }, 5000);
+      try {
+        await worker.closed;
+      } finally {
+        clearTimeout(timer);
+      }
+      return;
+    }
+    // Startup recovery must not kill an unrelated process that reused a saved PID.
+    if (!task.workerPid) return;
+    try {
+      process.kill(task.workerPid, 0);
+      if (process.platform !== 'linux') {
+        throw new Error(
+          'Cannot verify a surviving worker on this platform; stop it before restarting Beav',
+        );
+      }
+      const [command, environment] = await Promise.all([
+        readFile('/proc/' + task.workerPid + '/cmdline', 'utf8'),
+        readFile('/proc/' + task.workerPid + '/environ', 'utf8'),
+      ]);
+      if (
+        !command
+          .split('\0')
+          .includes(fileURLToPath(import.meta.resolve('@beav/worker')))
+      )
+        return;
+      const raw = environment
+        .split('\0')
+        .find((value) => value.startsWith('BEAV_WORKER_TASK='));
+      const assigned = AssignedTaskSchema.safeParse(
+        JSON.parse(raw?.slice('BEAV_WORKER_TASK='.length) ?? 'null'),
+      );
+      if (
+        assigned.success &&
+        assigned.data.id === task.id &&
+        assigned.data.claimedAt === task.claimedAt &&
+        assigned.data.retryCount === (task.retryCount ?? 0)
+      ) {
+        signalWorker(task.workerPid, 'SIGKILL');
+      }
+    } catch (error) {
+      if (
+        ['ESRCH', 'ENOENT'].includes(
+          (error as NodeJS.ErrnoException).code ?? '',
+        )
+      )
+        return;
+      throw error;
+    }
+  }
+
+  return {
+    launch,
+    stop,
+    wait: async (id: string) => {
+      await active.get(id)?.closed;
+    },
+    has: (id: string) => active.has(id),
+    async stopAll() {
+      await Promise.all(
+        [...active].map(([id, worker]) =>
+          stop({ id, workerPid: worker.process.pid ?? null }),
+        ),
+      );
+    },
+  };
 }
+export type WorkerManager = ReturnType<typeof createWorkerManager>;

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import readline from 'node:readline';
 import path from 'node:path';
+import { applicationDirectory } from '@beav/core/config';
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -19,15 +20,15 @@ export async function setup(): Promise<void> {
   const GITHUB_TOKEN = await ask('GitHub Token: ');
   const REPO_OWNER = await ask('Repo Owner: ');
   const REPO_NAME = await ask('Repo Name: ');
-  const ISSUE_TITLE = await ask('Issue Title (default: autofix): ');
+  const ISSUE_LABEL = await ask('Issue Label (default: autofix): ');
 
   const env = `GITHUB_TOKEN=${GITHUB_TOKEN}
 REPO_OWNER=${REPO_OWNER}
 REPO_NAME=${REPO_NAME}
-ISSUE_TITLE=${ISSUE_TITLE || 'autofix'}
+ISSUE_LABEL=${ISSUE_LABEL || 'autofix'}
 `;
 
-  const envPath = path.resolve(process.cwd(), '.env');
+  const envPath = path.join(applicationDirectory, '.env');
   fs.writeFileSync(envPath, env);
 
   console.log(`\nConfig saved to ${envPath}`);

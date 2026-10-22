@@ -1,54 +1,60 @@
-import path from "node:path";
-import fs from "node:fs/promises";
-import { spawn } from "node:child_process";
-import * as logger from "./logger.js";
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { runCommand } from './commands.js';
 
-export async function setupWorkspace(
+export function workspacePath(taskId: string, root: string) {
+  // Accept old ULIDs and new UUIDs; reject root itself, traversal and nested paths.
+  if (!/^[a-zA-Z0-9-]+$/.test(taskId))
+    throw new Error('Invalid workspace task ID: ' + taskId);
+  return path.join(path.resolve(root), taskId);
+}
+
+export function validateWorkspace(
   taskId: string,
-  repoOwner: string,
-  repoName: string,
-  workspaceRoot: string)
-{
-  const rootDir = path.resolve(workspaceRoot);
-  const targetDir = path.resolve(rootDir, taskId);
+  root: string,
+  directory: string,
+) {
+  const expected = workspacePath(taskId, root);
+  if (path.resolve(directory) !== expected)
+    throw new Error('Workspace path escapes task directory: ' + directory);
+  return expected;
+}
 
-  const relativeTarget = path.relative(rootDir, targetDir);
-  if (relativeTarget.startsWith("..") || path.isAbsolute(relativeTarget)) {
-    throw new Error(`SECURITY BREACH: Path traversal detected for ID ${taskId}`);
-  }
-
-  const tag = `workspace:${taskId.slice(-8)}`;
-  logger.info(tag, `Creating directory: ${targetDir}`);
-  await fs.rm(targetDir, { recursive: true, force: true });
-  await fs.mkdir(targetDir, { recursive: true });
-
-  const repoCloneUrl = `https://github.com/${repoOwner}/${repoName}.git`;
-  logger.info(tag, `Cloning ${repoOwner}/${repoName}...`);
+export async function removeWorkspace(taskId: string, root: string) {
+  const directory = workspacePath(taskId, root);
   try {
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn('git', ['clone', '--depth', '1', repoCloneUrl, '.'], {
-        cwd: targetDir,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-      let stderr = '';
-
-      proc.stderr.on('data', (chunk) => {
-        stderr += chunk.toString();
-      });
-      proc.on('error', reject);
-      proc.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-          return;
-        }
-
-        reject(new Error(stderr || `git clone failed with exit code ${code}`));
-      });
-    });
-    logger.info(tag, `Clone complete`);
-  } catch (err) {
-    throw new Error(`Git clone failed: ${err instanceof Error ? err.message : String(err)}`);
+    if ((await fs.lstat(path.resolve(root))).isSymbolicLink())
+      throw new Error('Workspace root must not be a symlink');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
   }
+  await fs.rm(directory, { recursive: true, force: true });
+}
 
-  return targetDir;
+export async function prepareWorkspace(
+  taskId: string,
+  owner: string,
+  repo: string,
+  root: string,
+  signal?: AbortSignal,
+) {
+  const directory = workspacePath(taskId, root);
+  await fs.mkdir(path.resolve(root), { recursive: true });
+  // Lexical checks are workspace isolation, not an OS sandbox.
+  await removeWorkspace(taskId, root);
+  await fs.mkdir(directory);
+  await runCommand(
+    'git',
+    [
+      'clone',
+      '--depth',
+      '1',
+      'https://github.com/' + owner + '/' + repo + '.git',
+      '.',
+    ],
+    directory,
+    signal,
+  );
+  return directory;
 }

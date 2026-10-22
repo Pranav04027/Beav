@@ -1,79 +1,80 @@
-export * from "./launcher.js";
-export * from "./retries.js";
-export * from "./tick.js";
+import { openDatabase } from '@beav/core/db';
+import { createTaskStore } from '@beav/core/task-store';
+import { loadConfig, loadEnvironment } from '@beav/core/config';
+import * as logger from '@beav/core/logger';
+import type { Config } from '@beav/core';
+import { createGitHubClient } from '@beav/tracker';
+import { createWorkerManager } from './launcher.js';
+import { recoverExecutions, tick } from './tick.js';
 
-import { stopActiveWorkers } from "./launcher.js";
-import { recoverOnStartup, tick } from "./tick.js";
-import { logger } from "@beav/core";
-import type { Workflow } from "@beav/core";
+export async function start(config?: Config) {
+  if (!config) loadEnvironment();
+  const settings = config ?? loadConfig();
+  const connection = openDatabase(settings.databasePath);
+  const store = createTaskStore(connection.database);
+  const workers = createWorkerManager(store, settings.workspaceRoot);
+  const context = {
+    config: settings,
+    store,
+    workers,
+    github: createGitHubClient(settings),
+  };
+  const controller = new AbortController();
+  let activeTick: Promise<void> = Promise.resolve();
+  let stopping: Promise<void> | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  let busy = false;
 
-export async function start(workflow?: Workflow) {
-    const { loadConfig } = await import("@beav/core");
-    const activeWorkflow = workflow ?? loadConfig();
+  const shutdown = () => {
+    stopping ??= (async () => {
+      controller.abort(new Error('Orchestrator is shutting down'));
+      if (timer) clearInterval(timer);
+      await activeTick.catch(() => {});
+      await workers.stopAll();
+      connection.close();
+      process.removeListener('SIGINT', onSignal);
+      process.removeListener('SIGTERM', onSignal);
+    })();
+    return stopping;
+  };
+  const onSignal = () => {
+    void shutdown().catch((error) => {
+      logger.error('shutdown', 'Shutdown failed', error);
+      process.exitCode = 1;
+    });
+  };
+  process.once('SIGINT', onSignal);
+  process.once('SIGTERM', onSignal);
 
-    logger.info('orchestrator', `Starting with repo ${activeWorkflow.repoOwner}/${activeWorkflow.repoName}`);
-    logger.info('orchestrator', `Poll interval: ${activeWorkflow.pollIntervalMs}ms, Max concurrent: ${activeWorkflow.maxConcurrent}`);
-
-    let tickInProgress = false;
-    let shuttingDown = false;
-    let timer: NodeJS.Timeout | null = null;
-
-    const shutdown = async (reason: string, exitCode = 0) => {
-      if (shuttingDown) {
-        return;
-      }
-
-      shuttingDown = true;
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-
-      logger.info('orchestrator', `Shutting down: ${reason}`);
-      await stopActiveWorkers();
-      logger.info('orchestrator', 'All workers stopped');
-      process.exitCode = exitCode;
-    };
-
-    const runTick = async (failHard = false) => {
-      if (tickInProgress || shuttingDown) {
-        if (tickInProgress) {
-          logger.info('orchestrator', 'Skipping tick: previous run still active');
+  const runTick = () => {
+    if (busy || controller.signal.aborted) return;
+    busy = true;
+    activeTick = tick(context, controller.signal)
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          logger.error('scheduler', 'Tick failed', error);
+          process.exitCode = 1;
+          // Do not await shutdown from the tick it waits for.
+          void shutdown();
         }
-        return;
-      }
-
-      tickInProgress = true;
-      try {
-        await tick(activeWorkflow);
-      } catch (error) {
-        logger.error('orchestrator', 'Fatal tick failure', error);
-        await shutdown('Stopping after fatal tick failure.', 1);
-        if (failHard) {
-          throw error;
-        }
-      } finally {
-        tickInProgress = false;
-      }
-    };
-
-    const handleSignal = (signal: NodeJS.Signals) => {
-      void shutdown(`Received ${signal}. Stopping active workers.`).finally(() => {
-        process.exit();
+      })
+      .finally(() => {
+        busy = false;
       });
-    };
+  };
 
-    process.once('SIGINT', handleSignal);
-    process.once('SIGTERM', handleSignal);
-
-    logger.info('orchestrator', 'Recovering stale tasks from previous run...');
-    await recoverOnStartup();
-
-    logger.info('orchestrator', 'Running first tick...');
-    await runTick(true);
-
-    logger.info('orchestrator', `Scheduler active — tick every ${activeWorkflow.pollIntervalMs}ms`);
-    timer = setInterval(() => {
-      void runTick();
-    }, activeWorkflow.pollIntervalMs);
+  try {
+    logger.info('startup', 'Database: ' + settings.databasePath);
+    activeTick = recoverExecutions(context, true);
+    await activeTick;
+    if (controller.signal.aborted) return { stop: shutdown };
+    runTick();
+    await activeTick;
+    if (!controller.signal.aborted)
+      timer = setInterval(runTick, settings.pollIntervalMs);
+    return { stop: shutdown };
+  } catch (error) {
+    await shutdown();
+    throw error;
+  }
 }

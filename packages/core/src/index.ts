@@ -1,9 +1,4 @@
-export * from "./schema.js"
-export * from './types.js';
-export * from './worker-events.js';
-export * from './config.js';
-export * from './db.js';
-export * from "./state-machine.js"
-export * from "./workspace.js"
-export * as logger from "./logger.js";
-export { eq, and, lt, asc, desc, inArray, sql } from "drizzle-orm";
+// Pure public types. Runtime modules have explicit package entry points.
+export type { Task, Config, TrackedIssue, TaskStatus } from './types.js';
+export type { TaskStore } from './task-store.js';
+export type { WorkerEvent, AssignedTask } from './worker-events.js';

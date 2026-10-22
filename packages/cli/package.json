@@ -15,13 +15,12 @@
     }
   },
   "scripts": {
-    "dev": "tsx src/index.ts",
     "build": "tsc",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "test": "node --test test/*.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
   "dependencies": {

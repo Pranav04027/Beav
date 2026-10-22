@@ -8,22 +8,23 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./manual": {
+      "types": "./dist/manual.d.ts",
+      "default": "./dist/manual.js"
     }
   },
   "scripts": {
-    "dev": "tsx src/index.ts",
     "build": "tsc",
-    "test": "node --test test/worker-events.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "clean": "rm -rf dist"
   },
   "devDependencies": {
-    "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   },
   "dependencies": {
     "@beav/core": "workspace:*",
     "@beav/tracker": "workspace:*",
-    "drizzle-orm": "^0.45.2",
-    "zod": "^4.3.6"
+    "@beav/worker": "workspace:*"
   }
 }

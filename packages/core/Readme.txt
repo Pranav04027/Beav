@@ -1,2 +1,1 @@
-The packages/core defines everything in the project, things like Types, Schema.
-Prevents Circular dependency problem: Gives independent services to Tracker and Orcestrator
+Core provides shared types, explicit configuration, SQLite initialization, the task store, lifecycle rules, workspace checks, command execution and logging. Import utilities without opening a database. See ../../readme.md for the reading order.

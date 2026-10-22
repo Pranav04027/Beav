@@ -1,78 +1,67 @@
-export type WorkerEvent =
-   {
-      type: 'heartbeat';
-      taskId: string;
-      ts: number;
-    }
-  | {
-      type: 'log';
-      taskId: string;
-      stream: 'system';
-      line: string;
-      ts: number;
-    }
-  | {
-      type: 'thread-state';
-      taskId: string;
-      threadId: string;
-      turnId: string;
-    }
-  | {
-      type: 'failed';
-      taskId: string;
-      error: string;
-      ts: number;
-      retryCount: number;
-    }
-  | {
-      type: 'completed';
-      taskId: string;
-      completedAt: number;
-      prNumber: number;
-      prUrl: string;
-    };
+import { z } from 'zod';
 
-export function isWorkerEvent(value: unknown): value is WorkerEvent {
-  if (!value || typeof value !== 'object') {
-    return false;
-  }
+export const AssignedTaskSchema = z.object({
+  id: z.string().regex(/^[a-zA-Z0-9-]+$/),
+  githubIssueNumber: z.number().int().positive(),
+  issueTitle: z.string(),
+  body: z.string().nullable(),
+  workspacePath: z.string().min(1),
+  workspaceRoot: z.string().min(1),
+  claimedAt: z.number().int().nonnegative(),
+  retryCount: z.number().int().nonnegative(),
+});
+export type AssignedTask = z.infer<typeof AssignedTaskSchema>;
 
-  const event = value as Partial<WorkerEvent> & { type?: string };
+export const failureKinds = [
+  'agent',
+  'publication',
+  'launch',
+  'crash',
+  'timeout',
+  'shutdown',
+] as const;
+export type FailureKind = (typeof failureKinds)[number];
 
-  switch (event.type) {
-    case 'heartbeat':
-      return (
-        typeof event.taskId === 'string' &&
-        typeof event.ts === 'number'
-      );
-    case 'log':
-      return (
-        typeof event.taskId === 'string' &&
-        event.stream === 'system' &&
-        typeof event.line === 'string' &&
-        typeof event.ts === 'number'
-      );
-    case 'thread-state':
-      return (
-        typeof event.taskId === 'string' &&
-        typeof event.threadId === 'string' &&
-        typeof event.turnId === 'string'
-      );
-    case 'failed':
-      return (
-        typeof event.taskId === 'string' &&
-        typeof event.error === 'string' &&
-        typeof event.ts === 'number' &&
-        typeof event.retryCount === 'number'
-      );
-    case 'completed':
-      return (
-        typeof event.taskId === 'string' &&
-        typeof event.completedAt === 'number' &&
-        typeof event.prNumber === 'number' &&
-        typeof event.prUrl === 'string'
-      );
-    default:
-      return false;
-  }
-}
+const common = { taskId: z.string().min(1) };
+export const WorkerEventSchema = z.discriminatedUnion('type', [
+  z.object({
+    ...common,
+    type: z.literal('heartbeat'),
+    ts: z.number().finite(),
+  }),
+  z.object({
+    ...common,
+    type: z.literal('log'),
+    stream: z.literal('system'),
+    line: z.string(),
+    ts: z.number().finite(),
+  }),
+  z.object({
+    ...common,
+    type: z.literal('thread-state'),
+    threadId: z.string(),
+    turnId: z.string(),
+  }),
+  z.object({
+    ...common,
+    type: z.literal('failed'),
+    error: z.string(),
+    kind: z.enum(failureKinds),
+    ts: z.number().finite(),
+  }),
+  z.object({
+    ...common,
+    type: z.literal('completed'),
+    completedAt: z.number().finite(),
+    prNumber: z.number().int().positive(),
+    prUrl: z.string().url(),
+  }),
+]);
+export type WorkerEvent = z.infer<typeof WorkerEventSchema>;
+
+export const WorkerAckSchema = z.object({
+  type: z.literal('ack'),
+  taskId: z.string(),
+  event: z.enum(['completed', 'failed']),
+  accepted: z.boolean(),
+});

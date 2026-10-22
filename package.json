@@ -4,18 +4,20 @@
   "private": true,
   "packageManager": "pnpm@10.33.0",
   "scripts": {
-    "dev": "pnpm -F @beav/core dev",
-    "dev:cli": "pnpm -F @beav/cli dev",
-    "dev:tracker": "pnpm -F @beav/tracker dev",
-    "dev:orchestrator": "pnpm -F @beav/orchestrator dev",
-    "dev:worker": "pnpm -F @beav/worker dev",
-    "format": "prettier --write .",
-    "build": "pnpm -r build",
-    "clean": "pnpm -r clean",
-    "start": "pnpm -C packages/cli exec tsx src/index.ts start"
+    "build": "node scripts/build.mjs",
+    "typecheck": "node scripts/build.mjs --check",
+    "start": "node packages/cli/dist/index.js start",
+    "setup": "node packages/cli/dist/index.js setup",
+    "status": "node packages/cli/dist/index.js status",
+    "logs": "node packages/cli/dist/index.js logs",
+    "test": "node scripts/build.mjs && node --test packages/*/test/*.test.mjs",
+    "format": "prettier --write ."
   },
   "devDependencies": {
     "@types/node": "^25.6.2",
     "prettier": "^3.8.1"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

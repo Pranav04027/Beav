@@ -1,13 +1,13 @@
 // ANSI color helpers
 const c = {
-  reset:  '\x1b[0m',
-  dim:    '\x1b[2m',
-  bold:   '\x1b[1m',
-  green:  '\x1b[32m',
+  reset: '\x1b[0m',
+  dim: '\x1b[2m',
+  bold: '\x1b[1m',
+  green: '\x1b[32m',
   yellow: '\x1b[33m',
-  red:    '\x1b[31m',
-  cyan:   '\x1b[36m',
-  gray:   '\x1b[90m',
+  red: '\x1b[31m',
+  cyan: '\x1b[36m',
+  gray: '\x1b[90m',
 };
 
 type LogLevel = 'info' | 'warn' | 'error';
@@ -22,7 +22,7 @@ function timestamp(): string {
 
 function levelTag(level: LogLevel): string {
   if (level === 'error') return `${c.bold}${c.red} ERR${c.reset}`;
-  if (level === 'warn')  return `${c.bold}${c.yellow}WARN${c.reset}`;
+  if (level === 'warn') return `${c.bold}${c.yellow}WARN${c.reset}`;
   return `${c.bold}${c.green}INFO${c.reset}`;
 }
 
@@ -49,8 +49,4 @@ export function error(module: string, message: string, context?: unknown) {
   } else {
     console.error(formatted);
   }
-}
-
-export function taskLog(taskId: string, message: string) {
-  info(`task:${taskId}`, message);
 }
